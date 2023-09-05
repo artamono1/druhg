@@ -25,14 +25,16 @@ class CustomBuildExtCommand(build_ext):
         # Call original build_ext command
         build_ext.run(self)
 
-
+_druhg_unionfind = Extension('druhg._druhg_unionfind',
+                         sources=['druhg/_druhg_unionfind.pyx'])
 _druhg_tree = Extension('druhg._druhg_tree',
                          sources=['druhg/_druhg_tree.pyx'])
-_druhg_amalgamation = Extension('druhg._druhg_amalgamation',
-                         sources=['druhg/_druhg_amalgamation.pyx'])
+_druhg_group = Extension('druhg._druhg_group',
+                         sources=['druhg/_druhg_group.pyx'])
 _druhg_label = Extension('druhg._druhg_label',
                          sources=['druhg/_druhg_label.pyx'])
-
+_cyheapq = Extension('druhg._cyheapq',
+                         sources=['druhg/_cyheapq.pyx'])
 
 
 def readme():
@@ -46,7 +48,7 @@ def requirements():
 
 configuration = {
     'name': 'druhg',
-    'version': '1.3.0',
+    'version': '1.5.0',
     'description': 'Universal clustering based on dialectical materialism',
     'long_description': readme(),
     'classifiers': [
@@ -67,19 +69,22 @@ configuration = {
     ],
     'keywords': 'cluster clustering density dialectics',
     'url': 'https://github.com/artamono/druhg',
-    'maintainer': 'Pavel "DRUHG" Artamonov',
+    'maintainer': 'Pavel Artamonov',
     'maintainer_email': 'druhg.p@gmail.com',
     'license': 'BSD',
     'packages': ['druhg', 'druhg.tests'],
     'install_requires': requirements(),
-    'ext_modules': [_druhg_tree,
-                    _druhg_amalgamation,
+    'ext_modules': [
+                    _druhg_unionfind,
+                    _druhg_tree,
+                    _druhg_group,
                     _druhg_label,
+                    _cyheapq
                     ],
     'zip_safe': False,
     'cmdclass': {'build_ext': CustomBuildExtCommand},
     'tests_require': ['pytest'],
-    'data_files': ('druhg/_druhg_amalgamation.pxd', 'druhg/_druhg_tree.pxd',)
+    'data_files': ('druhg/_druhg_unionfind.pxd', 'druhg/_druhg_group.pxd', 'druhg/_druhg_tree.pxd',)
 }
 
 if not HAVE_CYTHON:

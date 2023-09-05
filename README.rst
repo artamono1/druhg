@@ -2,7 +2,7 @@
     :target: https://pypi.python.org/pypi/druhg/
     :alt: PyPI Version
 .. image:: https://img.shields.io/pypi/l/druhg.svg
-    :target: https://github.com/artamono/druhg/blob/master/LICENSE
+    :target: https://github.com/artamono1/druhg/blob/master/LICENSE
     :alt: License
 
 =====
@@ -10,7 +10,7 @@ DRUHG
 =====
 
 | DRUHG - Dialectical Reflection Universal Hierarchical Grouping (друг).
-| Performs clustering based on subjective densities and builds a minimum spanning tree.
+| Performs clustering based on densities and builds a minimum spanning tree.
 | **Does not require parameters.** *(The parameter is metric)*
 | The user can filter the size of the clusters with ``limit1`` and ``limit2``.
 | To get the genuine result and genuine outliers set ``limit1`` to 1 and ``limit2`` to sample size.
@@ -37,12 +37,7 @@ Basic Concept
 
 | *Cluster is a mutually-close reflections.*
 | To come up with this universal solution philosophy of dialectical materialism was used.
-| You can read more about it in this work. In Russian
-| (https://druhg.readthedocs.io/en/latest/dialectic_of_data.html)
-| where you can read on:
-| - triad Quality-Quantity-Measure (distance-rank-memberships)
-| - triad Singular-Particular-Universal (subject-cluster-dataset)
-| - and more
+| You can read more in papers folder
 
 ----------------
 How to use DRUHG
@@ -84,7 +79,7 @@ It will relabel the clusters, by restricting their size.
 
 It will draw mstree with druhg-edges.
 
-.. image:: https://raw.githubusercontent.com/artamono/druhg/master/docs/source/pics/chameleon.jpg
+.. image:: https://raw.githubusercontent.com/artamono1/druhg/master/docs/source/pics/chameleon.jpg
     :width: 300px
     :align: center
     :height: 200px
@@ -137,7 +132,7 @@ Contributing
 ------------
 
 We welcome contributions in any form! Assistance with documentation, particularly expanding tutorials,
-is always welcome. To contribute please `fork the project <https://github.com/artamono/druhg/issues#fork-destination-box>`_ 
+is always welcome. To contribute please `fork the project <https://github.com/artamono1/druhg/issues#fork-destination-box>`_
 make your changes and submit a pull request. We will do our best to work through any issues with
 you and get your code merged into the main branch.
 
