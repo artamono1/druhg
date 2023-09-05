@@ -5,117 +5,30 @@
 # cython: initializedcheck=False
 # cython: cdivision=True
 
-# Labels nodes given mst-edgepairs and cluster-parents of DRUHG's results.
+# Labels the nodes using buffers from previous DRUHG's results.
 # Also provides tools for label manipulations, such as:
 # * Treats small clusters as outliers on-demand
 # * Breaks big clusters on-demand
 # * Glues outliers to the nearest clusters on-demand
 #
-# Author: Pavel "DRUHG" Artamonov
+# Author: Pavel Artamonov
 # License: 3-clause BSD
 
 import numpy as np
 cimport numpy as np
 
-from ._druhg_amalgamation import Amalgamation
-from ._druhg_amalgamation cimport Amalgamation
+from ._druhg_unionfind import UnionFind
+from ._druhg_unionfind cimport UnionFind
 
-cdef class UnionFind (object):
+from ._druhg_group cimport group_is_cluster, set_precision
+from ._druhg_group import Group
+from ._druhg_group cimport Group
 
-    cdef:
-        np.ndarray parent_arr
-        np.intp_t *parent
+def allocate_buffer_labels(np.intp_t size):
+    return np.empty(size, dtype=np.intp)
 
-        np.intp_t next_label
-        np.intp_t full_size
-
-    def __init__(self, N):
-        self.full_size = N
-        self.next_label = N + 1
-
-        self.parent_arr = np.zeros(2 * N, dtype=np.intp)
-        self.parent = (<np.intp_t *> self.parent_arr.data)
-
-        # self._fill_structure(edges_arr, num_edges)
-
-    cdef np.intp_t has_parent(self, np.intp_t n):
-        return self.parent[n]
-
-    cdef np.intp_t fast_find(self, np.intp_t n):
-        cdef np.intp_t p, temp
-
-        p = self.parent[n]
-        if p == 0:
-            return n
-        while self.parent[p] != 0:
-            p = self.parent[p]
-
-        # label up to the root
-        while p != n:
-            temp = self.parent[n]
-            self.parent[n] = p
-            n = temp
-
-        return p
-
-    cdef np.intp_t passive_find(self, np.intp_t n):
-        cdef np.intp_t p, temp
-
-        p = self.parent[n]
-        if p == 0:
-            return n
-        while self.parent[p] != 0:
-            p = self.parent[p]
-
-        return p
-
-    cdef np.intp_t passive_union(self, np.intp_t aa, np.intp_t bb):
-        # aa, bb = self.fast_find(aa), self.fast_find(bb)
-        cdef np.intp_t ret
-
-        ret = self.next_label
-        self.parent[aa] = self.parent[bb] = ret
-        self.next_label += 1
-        return ret
-
-    cdef list discard_clusters(self, np.intp_t n, set clusters):
-        cdef:
-            np.intp_t p, temp
-            list ret
-
-        ret = []
-        p = self.parent[n]
-        if p == 0:
-            return ret
-        while self.parent[p] != 0:
-            if p in clusters:
-                ret.append(p)
-            p = self.parent[p]
-        if ret:
-            ret.pop()
-        return ret
-
-    cdef np.intp_t label_find(self, np.intp_t n, set clusters):
-        cdef np.intp_t p, temp, label
-
-        label = -1
-
-        p = self.parent[n]
-        if p == 0:
-            return label
-
-        if p in clusters:
-            label = p
-        while self.parent[p] != 0:
-            p = self.parent[p]
-            if p in clusters:
-                label = p
-        if label >= 0:
-            while label != n:
-                temp = self.parent[n]
-                self.parent[n] = label
-                n = temp
-        return label
+cdef getIndex(UnionFind U, np.intp_t p):
+    return p - U.p_size - 1
 
 cdef void fixem(np.ndarray edges_arr, np.intp_t num_edges, np.ndarray result):
     cdef:
@@ -139,7 +52,7 @@ cdef void fixem(np.ndarray edges_arr, np.intp_t num_edges, np.ndarray result):
         res = result[b]
         result[a] = res
         if a in new_results:
-            links = set([a])
+            links = set(a)
             dontstop = 1
             while dontstop:
                 dontstop = 0
@@ -154,86 +67,80 @@ cdef void fixem(np.ndarray edges_arr, np.intp_t num_edges, np.ndarray result):
 
     return
 
-def emerge_clusters(UnionFind U, np.ndarray edges_arr, np.ndarray values_arr, np.intp_t limit1, np.intp_t limit2, \
-                    list exclude, is_reciprocal = 1, **kwargs):
+cdef mark_labels(UnionFind U, dict clusters, np.ndarray ret_labels):
+    cdef np.intp_t i, p, pp, label
+    i = U.p_size
+    while i:
+        i -= 1
+        p = U.parent[i]
+        label = -1
+        while p != 0:
+            pp = getIndex(U,p)
+            if pp in clusters:
+                label = pp
+                # break # can't break - the dict contains subclusters
+            p = U.parent[p]
+        ret_labels[i] = label
+    return ret_labels
 
+cdef emerge_clusters(UnionFind U, np.ndarray values_arr, np.ndarray group_arr,
+                     list exclude = None, np.intp_t limit1 = 0, np.intp_t limit2 = 0,
+                     np.ndarray ranks_arr = None):
     cdef:
-        np.intp_t e1,e2,e3, p1,p2, i, c
-        np.double_t v
+        np.intp_t p, i, cluster_size, loop_size, \
+            has_ranks
+        np.double_t v, limit = 0.
+        dict ret_clusters = {}
+    has_ranks = 1
+    if ranks_arr is None:
+        has_ranks = 0
+        ranks_arr = np.zeros(1)
 
-        Amalgamation being, being1, being2, being3
-        np.double_t jump1, jump2
-        list disc
-        dict d
-        set clusters
-        np.double_t PRECISION
+    p_group = Group(group_arr[0]) # helper
 
-    PRECISION = kwargs.get('double_precision2', kwargs.get('double_precision', 0.0000001)) # this is only relevant if distances between datapoints are super small
-    # extras = kwargs.get('extras_arr', None)
+    loop_size1, loop_size2 = U.p_size, U.p_size * 2
+    for u in range(loop_size1):
+        p = U.parent[u]
+        if p == 0:
+            continue
+        assert p >= U.p_size
+        p = getIndex(U, p)
+        assert p < U.p_size
+        v = values_arr[p]
+        # first ever node connection
+        p_group.assume_data(group_arr[p])
+        p_group.add_1(v)
 
-    being = Amalgamation()
-    being1 = being
-    being2 = being
+    for u in range(loop_size1, loop_size2):
+        p = U.parent[u]
+        if p == 0:
+            continue
+        p = getIndex(U, p)
+        p_group.assume_data(group_arr[p])
+        v = values_arr[p]
 
-    d = {}
-    clusters = set()
+        i = getIndex(U, u)
 
-    for i, v in enumerate(values_arr):
-        e1, e2 = edges_arr[2*i], edges_arr[2*i+1]
-        # print ('edges', e1, e2)
-        p1, p2 = U.passive_find(e1), U.passive_find(e2)
-        being1, being2 = being, being
+        if not group_is_cluster(group_arr[i], &limit, v):
+            p_group.aggregate(group_arr[i])
+            continue
 
-        if U.has_parent(e1):
-            being1 = d.pop(p1)
-        if U.has_parent(e2):
-            being2 = d.pop(p2)
+        p_group.add_cluster(limit, group_arr[i])
+        cluster_size = group_arr[i][0]
+        if limit1 < cluster_size < limit2 \
+                and i not in exclude: # эта структура будет включать в себя подкластеры
+            # TODO: should we include subclusters?
+            ret_clusters[i] = (i, cluster_size, limit, group_arr[i][2], v, ranks_arr[has_ranks * p])
 
-        if is_reciprocal:
-            jump1 = being1.border_overcoming_rev(v, being2, PRECISION)
-            jump2 = being2.border_overcoming_rev(v, being1, PRECISION)
-        else:
-            jump1 = being1.border_overcoming(v, being2, PRECISION)
-            jump2 = being2.border_overcoming(v, being1, PRECISION)
+    return ret_clusters
 
-# TODO: добавить ворнинг на пресижн?
-
-        if being1.size > 1 \
-            and jump1 >= 0 \
-            and limit1 < being1.size < limit2 \
-            and p1 not in exclude:
-            clusters.add(p1)
-
-        if being2.size > 1 \
-            and jump2 >= 0 \
-            and limit1 < being2.size < limit2 \
-            and p2 not in exclude:
-            clusters.add(p2)
-
-        being3 = being1.merge_amalgamations(v, being2, jump1, jump2)
-
-        e3 = U.passive_union(U.passive_find(e1), U.passive_find(e2))
-        # print(p1,p2,e3)
-        d[e3] = being3
-        if being2 != being:
-            del being2
-
-        disc = U.discard_clusters(e1, clusters)
-        for c in disc:
-            clusters.discard(c)
-        disc = U.discard_clusters(e2, clusters)
-        for c in disc:
-            clusters.discard(c)
-
-        U.label_find(e1, clusters)
-        U.label_find(e2, clusters)
-
-    return clusters
-
-
-cpdef np.ndarray label(np.ndarray edges_arr, np.ndarray values_arr, int size = 0, list exclude = None, \
-                       np.intp_t limit1 = 0, np.intp_t limit2 = 0, np.intp_t fix_outliers = 1, is_reciprocal = 1):
-    """Returns cluster labels.
+cpdef np.ndarray label(np.ndarray values_arr, np.ndarray uf_arr, int size,
+                       np.ndarray group_arr, np.ndarray ret_labels,
+                       np.ndarray ranks_arr=None,
+                       list exclude = None, np.intp_t limit1 = 0, np.intp_t limit2 = 0,
+                       np.intp_t fix_outliers = 0, edgepairs_arr=None,
+                       precision=0.0000001):
+    """Returns cluster labels and clusters densities.
     
     Uses the results of DRUHG MST-tree algorithm(edges and values).
     Marks data-points with corresponding parent index of a cluster.
@@ -247,7 +154,10 @@ cpdef np.ndarray label(np.ndarray edges_arr, np.ndarray values_arr, int size = 0
         Edgepair nodes of mst.
     
     values_arr : ndarray
-        Edge values.
+        Edge values two for each edge.
+
+    ranks_arr : ndarray
+        Edge ranks one for each edge.
         
     size : int
         Amount of nodes.
@@ -264,10 +174,10 @@ cpdef np.ndarray label(np.ndarray edges_arr, np.ndarray values_arr, int size = 0
         Use it to break down big clusters.
  
     fix_outliers: int, optional (default=0)
-        All outliers will be assigned to the nearest cluster.
-
-    is_reciprocal: int, optional (default=1)
-        The formula turns upside down.
+        All outliers will be assigned to the nearest cluster. Need to pass mst(edgepairs).
+    
+    edgepairs_arr: array, optional (default=None)
+        Used with fix_outliers.
 
     Returns
     -------
@@ -275,15 +185,15 @@ cpdef np.ndarray label(np.ndarray edges_arr, np.ndarray values_arr, int size = 0
     labels : array [size]
        An array of cluster labels, one per data-point. Unclustered points get
        the label -1.
+       
+    clusters : dictionary
+        A dictionary: keys - labels, values - tuples (distance, rank).   
+       
     """
 
     cdef:
-        set clusters
+        dict ret_clusters
         int i
-
-        np.ndarray result_arr
-        np.intp_t *result
-
 
     if limit1 <= 0:
         limit1 = int(np.ceil(np.sqrt(size)))
@@ -293,27 +203,34 @@ cpdef np.ndarray label(np.ndarray edges_arr, np.ndarray values_arr, int size = 0
         limit2 = size
         print ('label: default value for limit2 is used, clusters above '+str(limit2)+' will not be formed.')
 
+    # this is only relevant if distances between datapoints are super small
+    if precision is None:
+        precision = 0.0000001
+    set_precision(precision)
+
     if size == 0:
-        size = int(len(edges_arr)/2 + 1)
+        size = int((len(uf_arr)+1)/2)
 
     if not exclude:
         exclude = []
 
-    result_arr = -1*np.ones(size, dtype=np.intp)
-    result = (<np.intp_t *> result_arr.data)
+    if ret_labels is not None and len(ret_labels) < size:
+        print('ERROR: labels buffer is too small', len(ret_labels), size)
+        return
 
-    U = UnionFind(size)
-    clusters = emerge_clusters(U, edges_arr, values_arr, limit1, limit2, exclude, is_reciprocal)
+    group_arr[:size].fill(0)
 
-    i = size
-    while i:
-        i -= 1
-        result[i] = U.label_find(i, clusters)
+    U = UnionFind(size, uf_arr)
+    ret_clusters = emerge_clusters(U, values_arr, group_arr,
+                   exclude, limit1, limit2,
+                   ranks_arr)
 
-    if fix_outliers != 0 and len(np.unique(result_arr))>1:
-        fixem(edges_arr, len(values_arr), result_arr)
+    ret_labels = mark_labels(U, ret_clusters, ret_labels)
 
-    return result_arr
+    if fix_outliers != 0 and len(np.unique(ret_labels))>1 and edgepairs_arr is not None:
+        fixem(edgepairs_arr, size, ret_labels) # only possible through edgepairs
+
+    return ret_labels
 
 
 cdef np.ndarray pretty(np.ndarray labels_arr):

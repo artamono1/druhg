@@ -5,7 +5,7 @@ Clustering made by self-unrolling the relationships between the objects.
 It is most natural clusterization and requires ZERO parameters.
 """
 
-# Author: Pavel "DRUHG" Artamonov
+# Author: Pavel Artamonov, Last of the Soviets
 # druhg.p@gmail.com
 # License: 3-clause BSD
 
@@ -14,6 +14,7 @@ import numpy as np
 from sklearn.base import BaseEstimator, ClusterMixin
 from scipy.sparse import issparse
 from sklearn.neighbors import KDTree, BallTree
+import copy
 # from sklearn.externals.joblib import Memory
 # from sklearn.externals import six
 from warnings import warn
@@ -21,16 +22,35 @@ from warnings import warn
 from joblib.parallel import cpu_count
 
 from ._druhg_tree import UniversalReciprocity
+
 from ._druhg_label import label
 
 from .plots import MinimumSpanningTree, SingleLinkage
 
+# memory allocations
+from ._druhg_unionfind import allocate_unionfind_pair
+from ._druhg_tree import allocate_buffer_values, allocate_buffer_edgepairs, allocate_buffer_ranks
+from ._druhg_group import allocate_buffer_groups
+from ._druhg_label import allocate_buffer_labels # can be used with relabels
+
+KDTREE_VALID_METRICS = ["euclidean", "l2", "minkowski", "p", "manhattan", "cityblock", "l1", "chebyshev", "infinity"]
+BALLTREE_VALID_METRICS = KDTREE_VALID_METRICS + ["braycurtis", "canberra", "dice", "hamming", "haversine", "jaccard",
+                                                 "mahalanobis", "rogerstanimoto", "russellrao", "seuclidean",
+                                                 "sokalmichener", "sokalsneath",]
+FAST_METRICS = KDTREE_VALID_METRICS + BALLTREE_VALID_METRICS + ["cosine", "arccos"]
 
 def druhg(X, max_ranking=16,
-          limit1=None, limit2=None, exclude=None, fix_outliers=0, is_reciprocal=1,
+          do_labeling=True,
+          limit1=None, limit2=None, exclude=None, fix_outliers=0,
           metric='minkowski', p=2,
           algorithm='best', leaf_size=40,
-          verbose=False, core_n_jobs = None,  **kwargs):
+          core_n_jobs=None,
+
+          buffer_values=None, buffer_uf=None, buffer_uf_fast=None, buffer_out=None, buffer_groups=None,
+          do_edges=True, buffer_mst=None,
+          do_ranks=False, buffer_ranks=None,
+          buffer_labels=None,
+          verbose=False, **kwargs):
     """Perform DRUHG clustering from a vector array or distance matrix.
 
     Parameters
@@ -43,6 +63,9 @@ def druhg(X, max_ranking=16,
     max_ranking : int, optional (default=15)
         The maximum number of neighbors to search.
         Affects performance vs precision.
+
+    do_labeling : bool (default=True)
+        It returns labels, otherwise new data point.
 
     limit1 : float, optional (default=sqrt(size))
         Clusters that are smaller than this limit treated as noise.
@@ -60,9 +83,6 @@ def druhg(X, max_ranking=16,
 
     fix_outliers: int, optional (default=0)
         In case of 1 - all outliers will be assigned to the nearest cluster
-
-    is_reciprocal: int, optional (default=1)
-        In case of 0 - the formula turns upside down
 
     metric : string or callable, optional (default='minkowski')
         The metric to use when calculating distance between instances in a
@@ -171,7 +191,7 @@ def druhg(X, max_ranking=16,
         algorithm = 'kd_tree'
 
     if X.dtype != np.float64:
-        print ('Converting data to numpy float64')
+        print('Converting data to numpy float64')
         X = X.astype(np.float64)
 
     algo_code = 0
@@ -189,7 +209,7 @@ def druhg(X, max_ranking=16,
 
         if "kd" in algorithm.lower() and "tree" in algorithm.lower():
             algo_code = 0
-            if metric not in KDTree.valid_metrics:
+            if metric not in KDTREE_VALID_METRICS: #KDTree.valid_metrics:
                 raise ValueError('Metric: %s\n'
                                  'Cannot be used with KDTree' % metric)
             tree = KDTree(X, metric=metric, leaf_size=leaf_size, **kwargs)
@@ -198,30 +218,55 @@ def druhg(X, max_ranking=16,
             tree = BallTree(X, metric=metric, leaf_size=leaf_size, **kwargs)
         else:
             algo_code = 0
-            if metric not in KDTree.valid_metrics:
+            if metric not in KDTREE_VALID_METRICS:
                 raise ValueError('Metric: %s\n'
                                  'Cannot be used with KDTree' % metric)
             tree = KDTree(X, metric=metric, leaf_size=leaf_size, **kwargs)
             # raise TypeError('Unknown algorithm type %s specified' % algorithm)
 
-    is_slow = 0
-
-    if "slow" in algorithm.lower():
-        is_slow = 1
-
     if printout:
-        print ('Druhg is using defaults for: ' + printout)
+        print('Druhg is using defaults for: ' + printout)
 
-    ur = UniversalReciprocity(algo_code, tree, max_neighbors_search = max_ranking, metric = metric, leaf_size = leaf_size//3, n_jobs = core_n_jobs , is_slow = is_slow, **kwargs)
+    if do_edges and buffer_mst is None:
+        buffer_mst = allocate_buffer_edgepairs(size)
+    else:
+        buffer_mst = None
 
-    pairs, values = ur.get_tree()
+    if do_ranks and buffer_ranks is None:
+        buffer_ranks = allocate_buffer_ranks(size)
 
-    # extras = ur.get_extras()
-    labels = label(pairs, values, size, exclude=exclude, limit1=int(limit1), limit2=int(limit2), fix_outliers=fix_outliers, is_reciprocal=is_reciprocal, **kwargs)
+    if buffer_values is None:
+        buffer_values = allocate_buffer_values(size)
 
-    return (labels,
-            pairs, values
+    if buffer_uf is None:
+        buffer_uf, buffer_uf_fast = allocate_unionfind_pair(size)
+    if buffer_groups is None:
+        ndim = 0
+        if not do_labeling:
+            ndim = X.shape[1] # TODO: precomputed won't work
+        buffer_groups = allocate_buffer_groups(size, ndim)
+
+    if do_labeling and buffer_labels is None:
+        buffer_labels = allocate_buffer_labels(size)
+
+    ur = UniversalReciprocity(algo_code, tree,
+                              buffer_uf, buffer_uf_fast,
+                              buffer_values,
+                              max_neighbors_search=max_ranking, metric=metric,
+                              leaf_size=leaf_size // 3, n_jobs=core_n_jobs,
+                              buffer_ranks=buffer_ranks,
+                              buffer_edgepairs=buffer_mst,
+                              **kwargs)
+
+    buffer_values, buffer_uf = ur.get_buffers() # no need in getting it
+
+    buffer_labels = label(buffer_values, buffer_uf, size, buffer_groups, buffer_labels,
+                   exclude=exclude, limit1=int(limit1), limit2=int(limit2),
+                   fix_outliers=fix_outliers, **kwargs)
+    return (buffer_labels,
+            buffer_uf, buffer_values, buffer_groups, buffer_mst,
             )
+
 
 class DRUHG(BaseEstimator, ClusterMixin):
     def __init__(self, metric='euclidean',
@@ -231,17 +276,15 @@ class DRUHG(BaseEstimator, ClusterMixin):
                  limit2=None,
                  exclude=None,
                  fix_outliers=0,
-                 is_reciprocal=1,
                  leaf_size=40,
                  verbose=False,
-                 core_n_jobs = None,
+                 core_n_jobs=None,
                  **kwargs):
         self.max_ranking = max_ranking
         self.limit1 = limit1
         self.limit2 = limit2
         self.exclude = exclude
         self.fix_outliers = fix_outliers
-        self.is_reciprocal = is_reciprocal
         self.metric = metric
         self.algorithm = algorithm
         self.verbose = verbose
@@ -253,9 +296,23 @@ class DRUHG(BaseEstimator, ClusterMixin):
         # self._prediction_data = None
         self._size = 0
         self._raw_data = None
+        self.uf_ = None
         self.labels_ = None
-        self.mst_ = None
         self.values_ = None
+        self.groups_ = None
+        self.mst_ = None
+        self.ranks_ = None
+
+        self.new_data_ = None
+
+        # for reusal in all three parts
+        self._buffer_data1 = None
+        self._buffer_data2 = None
+        self._buffer_uf = None
+        self._buffer_uf_fast = None
+        self._buffer_values = None
+        self._buffer_mst = None
+        self._buffer_groups = None
 
     def fit(self, X, y=None):
         """Perform DRUHG clustering.
@@ -279,8 +336,11 @@ class DRUHG(BaseEstimator, ClusterMixin):
         self._raw_data = X
 
         (self.labels_,
+         self.uf_,
+         self.values_,
+         self.groups_,
          self.mst_,
-         self.values_) = druhg(X, **kwargs)
+         ) = druhg(X, **kwargs)
 
         return self
 
@@ -309,7 +369,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         print ('todo: not done yet')
         return None
 
-    def relabel(self, exclude=None, limit1=None, limit2=None, fix_outliers=None, is_reciprocal=None,  **kwargs):
+    def relabel(self, exclude=None, limit1=None, limit2=None, fix_outliers=None, **kwargs):
         """Relabeling with the limits on cluster size.
 
         Parameters
@@ -324,8 +384,6 @@ class DRUHG(BaseEstimator, ClusterMixin):
             resulting clusters would be smaller than this limit.
 
         fix_outliers : glues outliers to the nearest clusters
-
-        is_reciprocal : reciprocal formula
 
         Returns
         -------
@@ -357,14 +415,66 @@ class DRUHG(BaseEstimator, ClusterMixin):
             fix_outliers = 0
             printout += 'fix_outliers is set to ' + str(fix_outliers)+ ', '
 
-        if is_reciprocal is None:
-            is_reciprocal = 1
-            printout += 'is_reciprocal is set to ' + str(is_reciprocal)+ ', '
+        # this is only relevant if distances between datapoints are super small
+        precision = kwargs.get('double_precision2', kwargs.get('double_precision', None))
+        coords_arr = kwargs.get('coords_arr', None)
 
         if printout:
             print ('Relabeling using defaults for: ' + printout)
-        self.labels_ = label(self.mst_, self.values_, self._size, exclude, int(limit1), int(limit2), fix_outliers, is_reciprocal, **kwargs)
+        self.labels_ = label(self.values_, self.uf_, self._size,
+                             self.groups_, self.labels_,
+                             ranks_arr=self.ranks_,
+                             exclude=exclude, limit1=int(limit1), limit2=int(limit2),
+                             fix_outliers=fix_outliers, edgepairs_arr=self._buffer_mst,
+                             precision=precision)
+
         return self.labels_
+
+    def buffer_develop(self, **kwargs):
+
+        kwargs = self.get_params()
+        kwargs.update(self._metric_kwargs)
+
+        (self.new_data_,
+         self._buffer_uf,
+         self.values_, _, self.mst_) = druhg(self._buffer_data1, do_labeling=False,
+                                  buffer_values=self._buffer_values, buffer_uf=self._buffer_uf, buffer_uf_fast=self._buffer_uf_fast,
+                                  buffer_out=self._buffer_data2,
+                                  buffer_groups=self._buffer_groups,  **kwargs)
+
+        self._buffer_data2 = self.new_data_
+        self._buffer_data1, self._buffer_data2 = self._buffer_data2, self._buffer_data1
+        return self
+
+    def develop(self, XX, **kwargs):
+        kwargs = self.get_params()
+        kwargs.update(self._metric_kwargs)
+
+        (self.new_data_,
+         self._buffer_uf,
+         self.values_, _, self.mst_) = druhg(XX, do_labeling=False, **kwargs)
+
+        return self
+
+    def allocate_buffers(self, XX):
+        self._size = XX.shape[0]
+        self._raw_data = XX
+        # TODO: reuse if buffers are present
+        if self._buffer_data1 is None:
+             self._buffer_data1 = copy.deepcopy(self._raw_data)
+        if self._buffer_data2 is None:
+             self._buffer_data2 = np.copy(self._buffer_data1)
+
+        if self._buffer_uf is None:
+            self._buffer_uf, self._buffer_uf_fast = allocate_unionfind_pair(self._size)
+
+        if self._buffer_values is None:
+            self._buffer_values = allocate_buffer_values(self._size)
+        if self._buffer_groups is None:
+            self._buffer_groups = allocate_buffer_groups(self._size, self._raw_data.ndim)
+
+        return self
+
 
     @property
     def minimum_spanning_tree_(self):
@@ -384,8 +494,8 @@ class DRUHG(BaseEstimator, ClusterMixin):
         if self.mst_ is not None:
             if self._raw_data is not None:
                 return SingleLinkage(self.mst_,
-                                           self.values_,
-                                           self.labels_)
+                                     self.values_, # todo: add self.ranks_
+                                     self.labels_)
             else:
                 warn('No raw data is available.')
                 return None
