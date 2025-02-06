@@ -11,9 +11,8 @@ DRUHG
 
 | DRUHG - Dialectical Reflection Universal Hierarchical Grouping (друг).
 | Performs clustering based on densities and builds a minimum spanning tree.
-| **Does not require parameters.** *(The parameter is metric)*
-| The user can filter the size of the clusters with ``limit1`` and ``limit2``.
-| To get the genuine result and genuine outliers set ``limit1`` to 1 and ``limit2`` to sample size.
+| **Does not require parameters.** *(The parameter is space metric, e.x. euclidean)*
+| The user can filter the size of the clusters with ``size_range``, for genuine result and genuine outliers set to [1,1].
 | Parameter ``fix_outliers`` allows to label outliers to their closest clusters via mstree edges.
 
 -------------
@@ -24,20 +23,19 @@ Basic Concept
 | It works by applying **the universal society rule: treat others how you want to be treated**.
 | The core of the algorithm is to rank the subject's closest subjective similarities and amalgamate them accordingly.
 | Parameter ``max_ranking`` controls precision vs productivity balance, after some value the precision and the result would not change.
-| Parameter ``algorithm`` can be set to 'slow' to further enhance the precision.
+| todo: Parameter ``algorithm`` can be set to 'slow' to further enhance the precision.
+|
+|
+| The **dialectical distance** reflects the opposite density.
+| Max( r/R d(r); d(R) ), where r and R are ranks from A to B and from B to A.
+| This orders outliers last and equal densities first.
+| It's great **replacement for DBSCAN** and **global outliers detection**.
+|
+|
+| Those ordered connections become trees. Two trees reflect of each other in their totality and can transfrom into cluster.
+| D N₂ K₁/(K₁+K₂) sum 1/dᵢ > N₁ - 1, where N is size of a tree, K is number of clusters in a tree.
+| This allows newly formed clusters to resist the reshaping.
 
-| The relationship of two objects sets two local densities, and distorts the distance between them.
-| That **dialectical distance** is the reflection - one objects adjusts it's density to fit it's counterpart.
-| This allows to arrange all of the relationships into minimal spanning tree.
-| Mutual closeness is preferential.
-
-| At the start, unconnected objects amalgamate into Universal and these contradictions define what amalgamation is the cluster.
-| The amalgamation has to reflect in the other to emerge as a cluster. The more sizeable adversary the more probable is the change.
-| After formation big cluster resists the outliers. This makes it a great algorithm for **outlier detection**.
-
-| *Cluster is a mutually-close reflections.*
-| To come up with this universal solution philosophy of dialectical materialism was used.
-| You can read more in papers folder
 
 ----------------
 How to use DRUHG
@@ -57,7 +55,7 @@ It will build the tree and label the points. Now you can manipulate clusters by 
 
 .. code:: python
 
-             labels = dr.relabel(limit1=1, limit2=len(XX)/2, fix_outliers=1)
+             labels = dr.relabel(size_range==[1, len(XX)/2], fix_outliers=1)
              ari = adjusted_rand_score(iris['target'], labels)
              print ('iris ari', ari)
 
@@ -65,19 +63,15 @@ It will relabel the clusters, by restricting their size.
 
 .. code:: python
 
-            from druhg import DRUHG
-            import matplotlib.pyplot as plt
-            import pandas as pd, numpy as np
-
-            XX = pd.read_csv('chameleon.csv', sep='\t', header=None)
-            XX = np.array(XX)
-            clusterer = DRUHG(max_ranking=200)
-            clusterer.fit(XX)
-
-            plt.figure(figsize=(30,16))
-            clusterer.minimum_spanning_tree_.plot(node_size=200)
+            clusterer.plot(labels)
 
 It will draw mstree with druhg-edges.
+
+.. code:: python
+
+            clusterer.plot()
+
+It will provide interactive sliders for an exploration.
 
 .. image:: https://raw.githubusercontent.com/artamono1/druhg/master/docs/source/pics/chameleon.jpg
     :width: 300px
@@ -90,6 +84,12 @@ Performance
 -----------
 | It can be slow on a highly structural data.
 | There is a parameters ``max_ranking`` that can be used to decrease for a better performance.
+
+.. image:: https://raw.githubusercontent.com/artamono1/druhg/master/docs/source/pics/first/example_comparison.png
+    :width: 300px
+    :align: center
+    :height: 200px
+    :alt: comparison
 
 ----------
 Installing
@@ -110,13 +110,8 @@ The package tests can be run after installation using the command:
 
 .. code:: bash
 
-    pytest -s druhg
+    pytest -k "test_name"
 
-or
-
-.. code:: bash
-
-    python -m pytest -s druhg
 
 The tests may fail :-D
 
@@ -124,7 +119,7 @@ The tests may fail :-D
 Python Version
 --------------
 
-The druhg library supports both Python 2 and Python 3. 
+The druhg library supports Python 3.
 
 
 ------------
