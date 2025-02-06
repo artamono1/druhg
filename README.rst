@@ -31,7 +31,6 @@ Basic Concept
 | This orders outliers last and equal densities first.
 | It's great **replacement for DBSCAN** and **global outliers detection**.
 |
-|
 | Those ordered connections become trees. Two trees reflect of each other in their totality and can transfrom into cluster.
 | D N₂ K₁/(K₁+K₂) sum 1/dᵢ > N₁ - 1, where N is size of a tree, K is number of clusters in a tree.
 | This allows newly formed clusters to resist the reshaping.
@@ -73,11 +72,11 @@ It will draw mstree with druhg-edges.
 
 It will provide interactive sliders for an exploration.
 
-.. image:: https://raw.githubusercontent.com/artamono1/druhg/master/docs/source/pics/chameleon.jpg
+.. image:: https://raw.githubusercontent.com/artamono1/druhg/master/docs/source/pics/chameleon-sliders.png
     :width: 300px
     :align: center
     :height: 200px
-    :alt: chameleon
+    :alt: chameleon-sliders
 
 -----------
 Performance
@@ -85,7 +84,7 @@ Performance
 | It can be slow on a highly structural data.
 | There is a parameters ``max_ranking`` that can be used to decrease for a better performance.
 
-.. image:: https://raw.githubusercontent.com/artamono1/druhg/master/docs/source/pics/first/example_comparison.png
+.. image:: https://raw.githubusercontent.com/artamono1/druhg/master/docs/source/pics/comparison_ver.png
     :width: 300px
     :align: center
     :height: 200px
