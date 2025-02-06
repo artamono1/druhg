@@ -7,9 +7,9 @@
 
 # Labels the nodes using buffers from previous DRUHG's results.
 # Also provides tools for label manipulations, such as:
-# * Treats small clusters as outliers on-demand
-# * Breaks big clusters on-demand
-# * Glues outliers to the nearest clusters on-demand
+# * Treats small clusters as outliers
+# * (on-demand) Breaks big clusters
+# * (on-demand) Glues outliers to the nearest clusters
 #
 # Author: Pavel Artamonov
 # License: 3-clause BSD
@@ -20,217 +20,318 @@ cimport numpy as np
 from ._druhg_unionfind import UnionFind
 from ._druhg_unionfind cimport UnionFind
 
-from ._druhg_group cimport group_is_cluster, set_precision
+from ._druhg_group cimport set_precision
 from ._druhg_group import Group
 from ._druhg_group cimport Group
 
 def allocate_buffer_labels(np.intp_t size):
     return np.empty(size, dtype=np.intp)
 
-cdef getIndex(UnionFind U, np.intp_t p):
-    return p - U.p_size - 1
+cdef class Clusterizer(object):
+    cdef UnionFind _U
+    cdef np.ndarray _values_arr
+    cdef np.ndarray _data_arr # for motion only
+    cdef np.ndarray group_arr
+    cdef np.ndarray ret_sizes
+    cdef np.ndarray ret_clusters
 
-cdef void fixem(np.ndarray edges_arr, np.intp_t num_edges, np.ndarray result):
-    cdef:
-        np.intp_t p, a, b, dontstop
-        set new_results, links
-        list new_path, restart
+    def __init__(self, np.ndarray _uf_arr, int _size, np.ndarray _values_arr, np.ndarray _data_arr,
+                np.ndarray buf_ret_clusters,
+                np.ndarray buf_ret_sizes,
+                np.ndarray buf_group_arr):
+        """ Uses the results of DRUHG MST-tree algorithm(unionfind structure and values).
+            Emerge clusters and sizes arrays for later labeling.
 
-    new_results = set()
-    new_path = []
-    restart = []
-    for p in range(0, num_edges):
-        a, b = edges_arr[2*p], edges_arr[2*p + 1]
-        if result[a] < 0 and result[b] < 0:
-            new_results.update([a,b])
-            new_path.append((a,b))
-            continue
-        elif result[b] < 0:
-            a,b = b,a
-        elif result[a] >= 0:
-            continue
-        res = result[b]
-        result[a] = res
-        if a in new_results:
-            links = set(a)
-            dontstop = 1
-            while dontstop:
-                dontstop = 0
-                for path in list(new_path):
-                    a, b = path
-                    if a in links or b in links:
-                        result[a] = result[b] = res
-                        # print ('new_r', a, b, res)
-                        links.update([a,b])
-                        new_path.remove(path)
-                        dontstop = 1
+            Parameters
+            ----------
+            _uf_arr : ndarray
+                Unionfind structure from first phase.
 
-    return
+            _size : int
+                Amount of nodes.
 
-cdef mark_labels(UnionFind U, dict clusters, np.ndarray ret_labels):
-    cdef np.intp_t i, p, pp, label
-    i = U.p_size
-    while i:
-        i -= 1
-        p = U.parent[i]
-        label = -1
-        while p != 0:
-            pp = getIndex(U,p)
-            if pp in clusters:
-                label = pp
-                # break # can't break - the dict contains subclusters
-            p = U.parent[p]
-        ret_labels[i] = label
-    return ret_labels
+            _values_arr : ndarray
+                Edge values two for each edge.
 
-cdef emerge_clusters(UnionFind U, np.ndarray values_arr, np.ndarray group_arr,
-                     list exclude = None, np.intp_t limit1 = 0, np.intp_t limit2 = 0,
-                     np.ndarray ranks_arr = None):
-    cdef:
-        np.intp_t p, i, cluster_size, loop_size, \
-            has_ranks
-        np.double_t v, limit = 0.
-        dict ret_clusters = {}
-    has_ranks = 1
-    if ranks_arr is None:
-        has_ranks = 0
-        ranks_arr = np.zeros(1)
+            _data_arr : ndarray, nullable
+                Points coordinates (motion only).
 
-    p_group = Group(group_arr[0]) # helper
+            buf_ret_clusters : ndarray
+                Buffer related to 2nd half of UF. If positive then parent clusters it.
 
-    loop_size1, loop_size2 = U.p_size, U.p_size * 2
-    for u in range(loop_size1):
-        p = U.parent[u]
-        if p == 0:
-            continue
-        assert p >= U.p_size
-        p = getIndex(U, p)
-        assert p < U.p_size
-        v = values_arr[p]
-        # first ever node connection
-        p_group.assume_data(group_arr[p])
-        p_group.add_1(v)
+            buf_ret_sizes : ndarray
+                Buffer related to 2nd half of UF. Node size (points, not edges).
 
-    for u in range(loop_size1, loop_size2):
-        p = U.parent[u]
-        if p == 0:
-            continue
-        p = getIndex(U, p)
-        p_group.assume_data(group_arr[p])
-        v = values_arr[p]
+            buf_group_arr : ndarray
+                Buffer related to 2nd half of UF.
 
-        i = getIndex(U, u)
+        """
 
-        if not group_is_cluster(group_arr[i], &limit, v):
-            p_group.aggregate(group_arr[i])
-            continue
+        if _size is None or _size == 0:
+            _size = int((len(_uf_arr) + 1) / 2)
+        self._U = UnionFind(_size, _uf_arr)
 
-        p_group.add_cluster(limit, group_arr[i])
-        cluster_size = group_arr[i][0]
-        if limit1 < cluster_size < limit2 \
-                and i not in exclude: # эта структура будет включать в себя подкластеры
-            # TODO: should we include subclusters?
-            ret_clusters[i] = (i, cluster_size, limit, group_arr[i][2], v, ranks_arr[has_ranks * p])
+        self._data_arr = _data_arr
+        self._values_arr = _values_arr
 
-    return ret_clusters
+        # TODO: check the allocations and the size
+        # if ret_labels is not None and len(ret_labels) < self._U.p_size:
+        #     print('ERROR: labels buffer is too small', len(ret_labels), self._U.p_size)
+        #     return
 
-cpdef np.ndarray label(np.ndarray values_arr, np.ndarray uf_arr, int size,
-                       np.ndarray group_arr, np.ndarray ret_labels,
-                       np.ndarray ranks_arr=None,
-                       list exclude = None, np.intp_t limit1 = 0, np.intp_t limit2 = 0,
-                       np.intp_t fix_outliers = 0, edgepairs_arr=None,
-                       precision=0.0000001):
-    """Returns cluster labels and clusters densities.
-    
-    Uses the results of DRUHG MST-tree algorithm(edges and values).
-    Marks data-points with corresponding parent index of a cluster.
-    Exclude list breaks passed clusters by their parent index.
-    The parameters `limit1` and 'limit2' allows the clustering to declare noise points.
-    Outliers-noise marked by -1.
+        self.group_arr = buf_group_arr
+        self.ret_sizes = buf_ret_sizes
+        self.ret_clusters = buf_ret_clusters
 
-    Parameters
-    ----------
-    edges_arr : ndarray
-        Edgepair nodes of mst.
-    
-    values_arr : ndarray
-        Edge values two for each edge.
 
-    ranks_arr : ndarray
-        Edge ranks one for each edge.
-        
-    size : int
-        Amount of nodes.
-        
-    exclude : list
-        Clusters with parent-index from this list will not be formed. 
-    
-    limit1 : int, optional (default=sqrt(size))
-        Clusters that are smaller than this limit treated as noise. 
-        Use 1 to find True outliers.
-        
-    limit2 : int, optional (default=size)
-        Clusters with size OVER this limit treated as noise. 
-        Use it to break down big clusters.
- 
-    fix_outliers: int, optional (default=0)
-        All outliers will be assigned to the nearest cluster. Need to pass mst(edgepairs).
-    
-    edgepairs_arr: array, optional (default=None)
-        Used with fix_outliers.
+    cpdef emerge(self, precision=0.0000001, run_motion = False):
+        cdef:
+            np.intp_t p, i, cluster_size, loop_size, \
+                offset = self._U.get_offset()
+            np.double_t v, limit = 0.
 
-    Returns
-    -------
+        set_precision(precision)
 
-    labels : array [size]
-       An array of cluster labels, one per data-point. Unclustered points get
-       the label -1.
-       
-    clusters : dictionary
-        A dictionary: keys - labels, values - tuples (distance, rank).   
-       
-    """
+        # if self._data_arr is None and run_motion:
+        #     print('ERROR: data values are missing')
+        #     return
 
-    cdef:
-        dict ret_clusters
-        int i
+        self.group_arr[:self._U.p_size].fill(0)
+        self.ret_clusters[:self._U.p_size].fill(0)
+        self.ret_sizes[:self._U.p_size].fill(0)
 
-    if limit1 <= 0:
-        limit1 = int(np.ceil(np.sqrt(size)))
-        print ('label: default value for limit1 is used, clusters below '+str(limit1)+' are considered as noise.')
+        # helpers
+        x_group = Group(np.zeros_like(self.group_arr[:1])[0])
+        y_group = Group(np.zeros_like(self.group_arr[:1])[0])
+        p_group = Group(np.zeros_like(self.group_arr[:1])[0])
+        outlier_group = Group(np.zeros_like(self.group_arr[:1])[0])
+        outlier_group_cluster = 0
+        outlier_group.cook_outlier(0)
 
-    if limit2 <= 0:
-        limit2 = size
-        print ('label: default value for limit2 is used, clusters above '+str(limit2)+' will not be formed.')
+        loop_size1, loop_size2 = self._U.p_size, self._U.p_size * 2
 
-    # this is only relevant if distances between datapoints are super small
-    if precision is None:
-        precision = 0.0000001
-    set_precision(precision)
+        for u in range(loop_size1):
+            p = self._U.parent[u]
+            if p == 0:  # in case a point doesnt have any connection
+                continue
+            assert p >= self._U.p_size
+            p = p - offset
+            assert 0 <= p <= self._U.p_size
+            v = self._values_arr[p]
+            # r = self.ranks_arr[has_ranks * p]
 
-    if size == 0:
-        size = int((len(uf_arr)+1)/2)
+            # first ever node connection
+            p_group.assume_data(self.group_arr[p], self.ret_sizes[p], self.ret_clusters[p])
+            p_group.child(u, p_group.points() == 0)
 
-    if not exclude:
-        exclude = []
+            if run_motion:
+                p_group.mtn_add_1_coords(self._data_arr[u], v)
 
-    if ret_labels is not None and len(ret_labels) < size:
-        print('ERROR: labels buffer is too small', len(ret_labels), size)
+            p_group.add_1_autocluster(v)
+            self.ret_sizes[p] = p_group.points()
+            self.ret_clusters[p] = p_group.uniq_edges()
+
+        for u in range(loop_size1 + 1, loop_size2):
+            i = u - offset
+            assert 0 <= i <= self._U.p_size
+
+            if self.ret_sizes[i] == 0:
+                break
+            x_group.assume_data(self.group_arr[i], self.ret_sizes[i], self.ret_clusters[i])
+
+            p = self._U.parent[u]
+            if p == 0:
+                continue
+            p = p - offset
+            assert 0 <= p <= self._U.p_size
+
+            p_group.assume_data(self.group_arr[p], self.ret_sizes[p], self.ret_clusters[p])
+
+            has_child, is_outlier, j = p_group.child(i, False)
+            if not has_child:  # save to process later as pair
+                continue
+
+            v = self._values_arr[p]
+
+            if is_outlier:
+                y_group.assume_data(outlier_group.data, 1, 0)  # плохо сделано, надо отдельный метод
+                y_is_cluster = True
+            else:
+                y_group.assume_data(self.group_arr[j],
+                                    self.ret_sizes[j],
+                                    self.ret_clusters[j])  # можем таргетить дефолта? Когда координаты не нужны - 100%
+                y_is_cluster = False
+
+            common_coef = 1. / (x_group.uniq_edges() + y_group.uniq_edges() - 1.)
+            # print('common_coef', common_coef)
+            x_is_cluster = x_group.will_cluster(v, common_coef * y_group.points())
+            if not is_outlier:
+                y_is_cluster = y_group.will_cluster(v, common_coef * x_group.points())
+
+            p_group.aggregate(v, x_is_cluster, x_group, y_is_cluster, y_group)
+
+            self.ret_sizes[p] = p_group.points()
+            self.ret_clusters[p] = p_group.uniq_edges()
+
+            assert x_group.uniq_edges() <= 0
+            # non-clusters are negative
+            self.ret_clusters[i] = -x_group.uniq_edges() if x_is_cluster else x_group.uniq_edges()
+            if not is_outlier:
+                assert y_group.uniq_edges() <= 0
+                self.ret_clusters[j] = -y_group.uniq_edges() if y_is_cluster else y_group.uniq_edges()
+
+            # if run_motion:
+            #     # outlier coords already in p_group
+            #     p_group.mtn_aggregate(v, x_is_cluster, x_group.data, y_is_cluster, y_group.data)
+            #     x_group.mtn_mark_cluster(x_is_cluster)
+            #     y_group.mtn_mark_cluster(y_is_cluster)
+
+        if run_motion:
+            return self.group_arr
+        return self.ret_clusters, self.ret_sizes
+
+    cdef void _fixem(self, np.ndarray edges_arr, np.intp_t num_edges, np.ndarray result):
+        cdef:
+            np.intp_t p, a, b, dontstop
+            set new_results, links
+            list new_path, restart
+
+        new_results = set()
+        new_path = []
+        restart = []
+        for p in range(0, num_edges):
+            a, b = edges_arr[2 * p], edges_arr[2 * p + 1]
+            if result[a] < 0 and result[b] < 0:
+                new_results.update([a, b])
+                new_path.append((a, b))
+                continue
+            elif result[b] < 0:
+                a, b = b, a
+            elif result[a] >= 0:
+                continue
+            res = result[b]
+            result[a] = res
+            if a in new_results:
+                links = set([a])
+                dontstop = 1
+                while dontstop:
+                    dontstop = 0
+                    for path in list(new_path):
+                        a, b = path
+                        if a in links or b in links:
+                            result[a] = result[b] = res
+                            links.update([a, b])
+                            new_path.remove(path)
+                            dontstop = 1
+
         return
 
-    group_arr[:size].fill(0)
+    cdef _mark_labels(self, ret_labels,
+                     list exclude = None,
+                      np.intp_t limitL = 0, np.intp_t limitH = 0,
+                     ):
+        cdef np.intp_t i, p, pp, label, offset
+        print ('limL', limitL)
 
-    U = UnionFind(size, uf_arr)
-    ret_clusters = emerge_clusters(U, values_arr, group_arr,
-                   exclude, limit1, limit2,
-                   ranks_arr)
+        offset = self._U.get_offset()
 
-    ret_labels = mark_labels(U, ret_clusters, ret_labels)
+        i = self._U.p_size
+        while i:
+            i -= 1
+            p = self._U.parent[i]
+            label = -1
+            print('i', i)
+            while p != 0:
+                pp = p - offset
+                cluster_size = self.ret_sizes[pp]
+                print(cluster_size)
+                if cluster_size > limitH:
+                    break
+                print(cluster_size)
+                if self.ret_clusters[pp] > 0 and cluster_size >= limitL and pp not in exclude:
+                    label = pp
+                    print('label',pp)
+                p = self._U.parent[p]
+            print('exit', label)
+            ret_labels[i] = label
+        return ret_labels
 
-    if fix_outliers != 0 and len(np.unique(ret_labels))>1 and edgepairs_arr is not None:
-        fixem(edgepairs_arr, size, ret_labels) # only possible through edgepairs
+    cpdef np.ndarray label(self, np.ndarray ret_labels,
+                                list exclude=None, size_range=None,
+                                np.intp_t fix_outliers=0, edgepairs_arr=None,
+                                precision=0.0000001):
+        """Returns cluster labels and clusters densities.
+    
+        Marks data-points with corresponding parent index of a cluster.
+        Exclude list breaks passed clusters by their parent index.
+        `size_range` breaks clusters outside it's range.
+        Outliers-noise marked by -1.
+    
+        Parameters
+        ----------
+    
+        ret_labels : ndarray
+            The result. -1 are outliers.    
+    
+        exclude : list
+            Clusters with parent-index from this list will not be formed. 
+    
+        size_range : list, optional (default=[1,size])
+            Clusters that are smaller or over than the range treated as noise. 
+            Pass None to find True outliers.
+    
+        fix_outliers: bool, optional (default=False)
+            All outliers will be assigned to the nearest cluster. Need to pass mst(edgepairs).
+    
+        edgepairs_arr: array, optional (default=None)+
+            Used with fix_outliers.
+            
+        precision: double, optional
+            Relevant for small distances
+    
+        Returns
+        -------
+    
+        labels : array [size]
+           An array of cluster labels, one per data-point. Unclustered points get
+           the label -1.
+    
+        metalabels : dictionary, on-demand
+            A dictionary: keys - labels, values - tuples (distance, rank).   
+    
+        """
+        cdef:
+            int i
 
-    return ret_labels
+        if size_range is None:
+            limitL, limitH = 0, 0
+        else:
+            limitL, limitH = size_range[0], size_range[1]
+        if limitL < 0 or limitL > self._U.p_size:
+            print ('label: limitL is ignored. Cannot use '+str(limitL))
+            limitL = 0
+
+        if limitH <= 0 or limitH > self._U.p_size:
+            print ('label: limitH is ignored. Cannot use ' + str(limitH))
+            limitH = self._U.p_size
+
+        if not exclude:
+            exclude = []
+
+        if ret_labels is not None and len(ret_labels) < self._U.p_size:
+            print('ERROR: labels buffer is too small', len(ret_labels), self._U.p_size)
+            return
+
+        ret_labels = self._mark_labels(ret_labels,
+                                 exclude, limitL, limitH)
+
+        if fix_outliers == 1 and len(np.unique(ret_labels)) > 1:
+            if edgepairs_arr is not None:
+                self._fixem(edgepairs_arr, self._U.p_size - 1, ret_labels)
+            else:
+                print('To fix_outliers pass edgepairs', edgepairs_arr)
+
+        return ret_labels
 
 
 cdef np.ndarray pretty(np.ndarray labels_arr):

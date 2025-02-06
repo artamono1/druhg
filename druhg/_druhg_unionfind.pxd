@@ -23,6 +23,8 @@ cdef class UnionFind (object):
 
         np.intp_t next_label
 
+    cdef np.intp_t get_offset(self)
+
     cdef np.intp_t nullify(self)
 
     cdef np.intp_t mark_up(self, np.intp_t n)

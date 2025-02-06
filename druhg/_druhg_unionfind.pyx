@@ -46,6 +46,9 @@ cdef class UnionFind (object):
         else:
             self.fast = (<np.intp_t *> self.fast_arr.data)
 
+    cdef np.intp_t get_offset(self):
+        return self.p_size + 1
+
     cdef np.intp_t nullify(self):
         self.parent_arr[:2 * self.p_size] = 0
         i = self.p_size
