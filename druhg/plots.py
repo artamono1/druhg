@@ -368,8 +368,8 @@ class ClusterTree(object):
         def update_dis_slider(val):
             dis = self._values_arr[int(dis_slider.val)]
             dis_slider.valtext.set_text("{:.4f}".format(dis))
-            dis_slider.poly.set_xy([[dis_slider.val, 0.], [dis_slider.val, 2.],
-                                    [num_points, 2.], [num_points, 0.]])
+            # dis_slider.poly.set_xy([[dis_slider.val, 0.], [dis_slider.val, 2.], [num_points, 2.], [num_points, 0.]])
+            dis_slider.poly.set(xy=[dis_slider.val, 0.], height=2., width=(num_points - dis_slider.val + 1))
             if val is not None and not axbtn.get_visible():
                 update_plot(val)
             fig.canvas.draw_idle()
