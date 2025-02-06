@@ -242,10 +242,8 @@ cdef class Clusterizer(object):
             while p != 0:
                 pp = p - offset
                 cluster_size = self.ret_sizes[pp]
-                print(cluster_size)
                 if cluster_size > limitH:
                     break
-                print(cluster_size)
                 if self.ret_clusters[pp] > 0 and cluster_size >= limitL and pp not in exclude:
                     label = pp
                 p = self._U.parent[p]
