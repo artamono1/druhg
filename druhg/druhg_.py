@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-DRUHG: Dialectical Ranking Universal Hierarchical Grouping
+DRUHG: Dialectical Reflection Universal Hierarchical Grouping
 Clustering made by self-unrolling the relationships between the objects.
 It is most natural clusterization and requires ZERO parameters.
 """
 
-# Author: Pavel Artamonov, Last of the Soviets
+# Author: Pavel Artamonov
 # druhg.p@gmail.com
 # License: 3-clause BSD
 
@@ -24,10 +24,8 @@ from joblib.parallel import cpu_count
 from ._druhg_tree import UniversalReciprocity
 
 from ._druhg_label import Clusterizer
-from ._druhg_motion import develop
 
 from .plots import ClusterTree
-from .animation import Frames
 
 # memory allocations
 from ._druhg_unionfind import allocate_unionfind_pair
@@ -70,12 +68,9 @@ def druhg(X, max_ranking=16,
         The maximum number of neighbors to search.
         Affects performance vs precision.
 
-    do_labeling : bool (default=True)
-        It returns labels, otherwise new data point.
-
     size_range : [float, float], optional (default=[sqrt(size), size/2])
         Clusters that are smaller or bigger than this limit treated as noise.
-        Use [1,*] to find True outliers.
+        Use [1,1] to find True outliers.
         Numbers under 1 treated as percentage of the dataset size
 
     exclude: list, optional (default=None)
@@ -113,7 +108,7 @@ def druhg(X, max_ranking=16,
             * ``kdtree``
             * ``balltree``
         If you want it to be accurate add:
-            * ``slow``
+            * ``slow`` (todo)
 
     core_n_jobs : int, optional (default=None)
         Number of parallel jobs to run in neighbors distance computations (if
@@ -178,23 +173,26 @@ def druhg(X, max_ranking=16,
 
     if limitL is None:
         limitL = int(np.sqrt(size))
-        printout += 'LimitL is set to '+str(limitL)+', '
+        printout += 'Size_range`s lower bound is set to '+str(limitL)+', '
     else:
         if limitL < 0:
-            raise ValueError('LimitL must be non-negative integer!')
+            raise ValueError('Size_range must be non-negative!')
         if limitL < 1:
             limitL = int(limitL*size)
 
     if limitH is None:
         limitH = int(size/2 + 1)
-        printout += 'LimitH is set to '+str(limitH)+', '
+        printout += 'Size_range`s higher bound is set to '+str(limitH)+', '
     else:
         if limitH < 0:
-            raise ValueError('LimitL must be non-negative integer!')
+            raise ValueError('Size_range must be non-negative!')
         if limitH <= 1:
             limitH = int(limitH*size + 1)
 
     if algorithm == 'best':
+        algorithm = 'kd_tree'
+
+    if algorithm == 'slow': # todo: add XbyX matrix and forced precomputed
         algorithm = 'kd_tree'
 
     if X.dtype != np.float64:
@@ -273,22 +271,16 @@ def druhg(X, max_ranking=16,
                               **kwargs)
 
     buffer_values, buffer_uf = ur.get_buffers() # no need in getting it
-    if do_labeling:
-        clusterizer = Clusterizer(buffer_uf, size, buffer_values, X, buffer_clusters, buffer_sizes, buffer_groups)
-        buffer_clusters, buffer_sizes = clusterizer.emerge()
-        buffer_labels = clusterizer.label(buffer_labels,
-                       exclude=exclude, size_range=[int(limitL), int(limitH)],
-                       fix_outliers=fix_outliers, edgepairs_arr=buffer_mst, **kwargs)
-        return (buffer_labels,
-                buffer_values, buffer_ranks, buffer_uf,
-                buffer_groups, buffer_mst, buffer_sizes, buffer_clusters,
-                )
-    out_data = develop(buffer_values, buffer_ranks, buffer_uf, size, buffer_groups, X, buffer_out,  **kwargs)
-
-    return (out_data,
+    clusterizer = Clusterizer(buffer_uf, size, buffer_values, X, buffer_clusters, buffer_sizes, buffer_groups)
+    buffer_clusters, buffer_sizes = clusterizer.emerge()
+    buffer_labels = clusterizer.label(buffer_labels,
+                   exclude=exclude, size_range=[int(limitL), int(limitH)],
+                   fix_outliers=fix_outliers, edgepairs_arr=buffer_mst, **kwargs)
+    return (buffer_labels,
             buffer_values, buffer_ranks, buffer_uf,
             buffer_groups, buffer_mst, buffer_sizes, buffer_clusters,
             )
+
 
 class DRUHG(BaseEstimator, ClusterMixin):
     def __init__(self, metric='euclidean',
@@ -408,10 +400,10 @@ class DRUHG(BaseEstimator, ClusterMixin):
         exclude : list of cluster-indexes, for surgical removal of certain clusters,
             could be omitted.
 
-        limitL : clusters under this size are considered as noise.
-
-        limitH : upper limit for the cluster size,
-            resulting clusters would be smaller than this limit.
+        size_range : [float, float], optional (default=[sqrt(size), size/2])
+            Clusters that are smaller or bigger than this limit treated as noise.
+            Use [1,1] to find True outliers.
+            Numbers under 1 treated as percentage of the dataset size
 
         fix_outliers : glues outliers to the nearest clusters
 
@@ -429,19 +421,19 @@ class DRUHG(BaseEstimator, ClusterMixin):
 
         if limitL is None:
             limitL = int(np.sqrt(size))
-            printout += 'limitL is set to ' + str(limitL) + ', '
+            printout += 'Size_range`s lower bound is set to ' + str(limitL) + ', '
         else:
             if limitL < 0:
-                raise ValueError('Limit1 must be non-negative integer!')
+                raise ValueError('Size_range must be non-negative!')
             if limitL < 1:
                 limitL = int(limitL * size)
 
         if limitH is None:
             limitH = int(size / 2 + 1)
-            printout += 'limitH is set to ' + str(limitH) + ', '
+            printout += 'Size_range`s higher bound is set to ' + str(limitH) + ', '
         else:
             if limitH < 0:
-                raise ValueError('Limit2 must be non-negative integer!')
+                raise ValueError('Size_range must be non-negative!')
             if limitH <= 1:
                 limitH = int(limitH * size + 1)
 
@@ -460,7 +452,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
 
         self.labels_ = clusterizer.label(self.labels_,
                        exclude=exclude, size_range=[int(limitL), int(limitH)],
-                       fix_outliers=fix_outliers, edgepairs_arr=self.mst_,
+                       fix_outliers=fix_outliers, edgepairs_arr=self._buffer_mst,
                        precision=precision, **kwargs)
 
         return self.labels_
@@ -471,8 +463,8 @@ class DRUHG(BaseEstimator, ClusterMixin):
         kwargs.update(self._metric_kwargs)
 
         (self.new_data_,
-         self.values_, self.ranks_, self.uf_,
-         self._buffer_groups, _, self.mst_, self.sizes_, self.clusters_) = druhg(self._buffer_data1, do_labeling=False,
+         self.values_, self.ranks_, self._buffer_uf,
+         self._buffer_uf, _, self.mst_, self.sizes_, self.clusters_) = druhg(self._buffer_data1, do_labeling=False,
                                   buffer_values=self._buffer_values, buffer_ranks=self._buffer_ranks,
                                   buffer_uf=self._buffer_uf, buffer_uf_fast=self._buffer_uf_fast,
                                   buffer_out=self._buffer_data2,
@@ -523,13 +515,6 @@ class DRUHG(BaseEstimator, ClusterMixin):
         return self
 
     @property
-    def frames_(self, **kwargs):
-        kwargs = self.get_params()
-        kwargs.update(self._metric_kwargs)
-
-        return Frames(self)
-
-    @property
     def single_linkage_(self):
         if self.mst_ is not None:
             if self._raw_data is not None:
@@ -543,7 +528,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
                 warn('No raw data is available.')
                 return None
         else:
-            raise AttributeError('No minimum spanning tree was generated. Need \'do_edges=True\'.')
+            raise AttributeError('No minimum spanning tree was generated. Need ``do_edges=True``.')
 
     def plot(self, static_labels=None, axis=None):
         if self._raw_data is not None:
