@@ -231,7 +231,6 @@ cdef class Clusterizer(object):
                       np.intp_t limitL = 0, np.intp_t limitH = 0,
                      ):
         cdef np.intp_t i, p, pp, label, offset
-        print ('limL', limitL)
 
         offset = self._U.get_offset()
 
@@ -240,7 +239,6 @@ cdef class Clusterizer(object):
             i -= 1
             p = self._U.parent[i]
             label = -1
-            print('i', i)
             while p != 0:
                 pp = p - offset
                 cluster_size = self.ret_sizes[pp]
@@ -250,9 +248,7 @@ cdef class Clusterizer(object):
                 print(cluster_size)
                 if self.ret_clusters[pp] > 0 and cluster_size >= limitL and pp not in exclude:
                     label = pp
-                    print('label',pp)
                 p = self._U.parent[p]
-            print('exit', label)
             ret_labels[i] = label
         return ret_labels
 
