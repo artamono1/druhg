@@ -242,10 +242,8 @@ cdef class Clusterizer(object):
             while p != 0:
                 pp = p - offset
                 cluster_size = self.ret_sizes[pp]
-                print(cluster_size)
                 if cluster_size > limitH:
                     break
-                print(cluster_size)
                 if self.ret_clusters[pp] > 0 and cluster_size >= limitL and pp not in exclude:
                     label = pp
                 p = self._U.parent[p]
@@ -304,12 +302,16 @@ cdef class Clusterizer(object):
         else:
             limitL, limitH = size_range[0], size_range[1]
         if limitL < 0 or limitL > self._U.p_size:
-            print ('label: limitL is ignored. Cannot use '+str(limitL))
+            print ('label: size_range[0] is ignored. Cannot use '+str(limitL))
             limitL = 0
+        if limitL < 1:
+            limitL = int(limitL * self._U.p_size)
 
-        if limitH <= 0 or limitH > self._U.p_size:
-            print ('label: limitH is ignored. Cannot use ' + str(limitH))
+        if limitH <= 0 or limitH > self._U.p_size + 1:
+            print ('label: size_range[1] is ignored. Cannot use ' + str(limitH))
             limitH = self._U.p_size
+        if limitH <= 1:
+            limitH = int(limitH * self._U.p_size + 1)
 
         if not exclude:
             exclude = []

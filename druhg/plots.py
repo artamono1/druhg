@@ -360,7 +360,7 @@ class ClusterTree(object):
                                    [0, qty_slider.val[1]], [1, qty_slider.val[1]],
                                    [1, num_points], [0, num_points]])
 
-            if val is not None and not axbtn.get_visible():
+            if val is not None and btn_apply is not None and not axbtn.get_visible():
                 update_plot(val)
             fig.canvas.draw_idle()
             fig.canvas.flush_events()
@@ -370,9 +370,11 @@ class ClusterTree(object):
             dis_slider.valtext.set_text("{:.4f}".format(dis))
             # dis_slider.poly.set_xy([[dis_slider.val, 0.], [dis_slider.val, 2.], [num_points, 2.], [num_points, 0.]])
             dis_slider.poly.set(xy=[dis_slider.val, 0.], height=2., width=(num_points - dis_slider.val + 1))
-            if val is not None and not axbtn.get_visible():
+
+            if val is not None and btn_apply is not None and not axbtn.get_visible():
                 update_plot(val)
-            fig.canvas.draw_idle()
+            if btn_apply is None or not axbtn.get_visible():
+                fig.canvas.draw_idle()
             fig.canvas.flush_events()
 
         def on_key_press(event):
