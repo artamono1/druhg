@@ -70,7 +70,7 @@ configuration = {
         'Programming Language :: Python :: 3.8',
     ],
     'keywords': 'cluster clustering density dialectics',
-    'url': 'https://github.com/artamono/druhg',
+    'url': 'https://github.com/artamono1/druhg',
     'maintainer': 'Pavel Artamonov',
     'maintainer_email': 'druhg.p@gmail.com',
     'license': 'BSD',
