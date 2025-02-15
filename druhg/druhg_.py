@@ -68,6 +68,9 @@ def druhg(X, max_ranking=16,
         The maximum number of neighbors to search.
         Affects performance vs precision.
 
+    do_labeling : bool (default=True)
+        It returns labels, otherwise new data point.
+
     size_range : [float, float], optional (default=[sqrt(size), size/2])
         Clusters that are smaller or bigger than this limit treated as noise.
         Use [1,1] to find True outliers.
@@ -271,16 +274,22 @@ def druhg(X, max_ranking=16,
                               **kwargs)
 
     buffer_values, buffer_uf = ur.get_buffers() # no need in getting it
-    clusterizer = Clusterizer(buffer_uf, size, buffer_values, X, buffer_clusters, buffer_sizes, buffer_groups)
-    buffer_clusters, buffer_sizes = clusterizer.emerge()
-    buffer_labels = clusterizer.label(buffer_labels,
-                   exclude=exclude, size_range=[int(limitL), int(limitH)],
-                   fix_outliers=fix_outliers, edgepairs_arr=buffer_mst, **kwargs)
-    return (buffer_labels,
+    if do_labeling:
+        clusterizer = Clusterizer(buffer_uf, size, buffer_values, X, buffer_clusters, buffer_sizes, buffer_groups)
+        buffer_clusters, buffer_sizes = clusterizer.emerge()
+        buffer_labels = clusterizer.label(buffer_labels,
+                       exclude=exclude, size_range=[int(limitL), int(limitH)],
+                       fix_outliers=fix_outliers, edgepairs_arr=buffer_mst, **kwargs)
+        return (buffer_labels,
+                buffer_values, buffer_ranks, buffer_uf,
+                buffer_groups, buffer_mst, buffer_sizes, buffer_clusters,
+                )
+    out_data = develop(buffer_values, buffer_ranks, buffer_uf, size, buffer_groups, X, buffer_out,  **kwargs)
+
+    return (out_data,
             buffer_values, buffer_ranks, buffer_uf,
             buffer_groups, buffer_mst, buffer_sizes, buffer_clusters,
             )
-
 
 class DRUHG(BaseEstimator, ClusterMixin):
     def __init__(self, metric='euclidean',
