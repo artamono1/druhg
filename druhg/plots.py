@@ -7,245 +7,41 @@ import numpy as np
 import collections
 from math import exp, log
 
-
 # from scipy.cluster.hierarchy import dendrogram
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 from warnings import warn
 
+class UF(object): # shadows _druhg_unionfind
+    def __init__(self, parents_arr, size):
+        self.parent = parents_arr
+        self.p_size = size
 
-class Joint(object):
-    def __init__(self, size=1, dist=0.):
-        self.size = size
-        self.val = dist
-        self.L = None  # L.size >= R.size
-        self.R = None
-        self.T = None
-        self.c = 'gray'
-
-    def walkup(self):
-        t = self
-        while t.T:
-            t = t.T
-        return t
-
-    def walkdown(self):
-        l = self
-        while l.L:
-            l = l.L
-        return l
+    def get_offset(self):
+        return self.p_size + 1
 
 
-class SingleLinkage(object):
-    # todo: make it pretty
-    def __init__(self, mst_pairs, values, labels):
-        self._mst_pairs = mst_pairs
-        self._values = values
-        # self._data = data
-        self._labels = labels
+class ClusterTree(object):
+    def __init__(self, uf_arr, data_arr, values_arr=None, sizes_arr=None, clusters_arr=None, mst_pairs=None, interactive=False):
+        self._U = UF(uf_arr, len(data_arr))
+        self._raw_data = data_arr
+        self._values_arr = values_arr
+        self._sizes_arr = sizes_arr
+        self._clusters_arr = clusters_arr
 
-        self.default_scale_coef = 10.
-        self.max_value = 1.
+        self._static_labels = None
 
-    def draw_dendrogram(self, ax, pairs, values, labels, lw=20., alpha=0.4, cmap='viridis'):
-        # Step 1: Fill and connect Joints. Evaluate scales.
-        # Step 2: Arrange outstanding trees.
-        # Step 3: Depth-First search. Apply radial or flat visualisation func.
+        self._mst_pairs = mst_pairs # TODO: rebuild it if null?
+        self._sum_coords = None
 
-        min_index, max_index = min(pairs), max(pairs)
-        if min_index < 0:
-            raise ValueError('Indices should be non-negative')
-        min_value, self.max_value = min(values), max(values[values != np.inf])
-        if min_value < 0:
-            raise ValueError('Values should be non-negative')
-
-        cm = self.get_dendro_colors(labels)
-
-        scale_sum = 0.
-
-        size = int(len(pairs) / 2 + 1)
-        tops = {}
-        # trees building
-        for j in range(0, size - 1):
-            a, b = pairs[2 * j], pairs[2 * j + 1]
-
-            v = values[j]
-            if v == np.inf:
-                scale_sum += self.max_value * self.default_scale_coef
-            else:
-                scale_sum += v
-
-            topjoi = Joint()
-
-            ta, sa = None, 1
-            if a in tops:
-                ta = tops[a].walkup()
-                sa = ta.size
-                ta.T = topjoi
-
-            tb, sb = None, 1
-            if b in tops:
-                tb = tops[b].walkup()
-                sb = tb.size
-                tb.T = topjoi
-
-            topjoi.size = sa + sb
-            topjoi.val = v
-            if sa >= sb:
-                topjoi.L, topjoi.R = ta, tb
-            else:
-                topjoi.L, topjoi.R = tb, ta
-
-            if labels[a] == labels[b]:
-                topjoi.c = cm[labels[a]]
-            tops[a] = topjoi
-            tops[b] = topjoi
-
-        # arranging trees in case they are not connected
-        trees = collections.OrderedDict()
-        for t in tops:
-            joi = tops[t].walkup()
-            if joi not in trees:
-                trees[joi] = joi.size
-
-        scale_sum += (len(trees) - 1) * self.max_value * self.default_scale_coef
-
-        self.plot_radial(ax, trees, labels, scale_sum)
-
-
-
-    def plot_radial(self, ax, trees, labels, scale_sum):
-        try:
-            from matplotlib import collections as mc
-            from matplotlib.pyplot import Arrow
-            from matplotlib.pyplot import Normalize
-            from matplotlib.pyplot import cm
-        except ImportError:
-            raise ImportError('You must install the matplotlib library to plot the minimum spanning tree.')
-
-        # norm = len(labels)
-        # sm = cm.ScalarMappable(cmap=cmap,
-        #                            norm=Normalize(0, norm))
-        # sm.set_array(norm)
-        # colors = self.get_dendro_colors(labels)
-        # c = 'gray'
-
-        # depth first search
-        x = 0.
-        # print('so many treeess', len(trees))
-
-        for tree in trees:
-            l = tree.walkdown()
-            while l:
-                l, x = self.dps_flat_plot(ax, l, x)
-            x += self.max_value * self.default_scale_coef
-
-        ax.set_xticks([])
-        for side in ('right', 'top', 'bottom'):
-            ax.spines[side].set_visible(False)
-        ax.set_ylabel('distance')
-
-        return ax
-
-    def dps_flat_plot(self, ax, joi, x):
-        c = joi.c
-        v = joi.val
-        vexp = (1.+v)**2
-        x1 = x
-        nx = x + vexp
-        x2 = nx
-        ht = vexp
-        h1 = h2 = (1. + v / 2.)**2
-        s1 = s2 = 1
-        if joi.L:
-            h1 = joi.L.val
-            s1 = joi.L.size
-        if joi.R:
-            h2 = joi.R.val
-            s2 = joi.R.size
-
-        ax.plot([x1, x2], [ht, ht], color=c, linewidth=log(1+s2))
-        ax.plot([x1, x1], [ht, h1], color=c)
-        ax.plot([x2, x2], [ht, h2], color=c)
-        # print(x1, x2, ht, h1, h2)
-        # print('hello', s1, s2, v, joi.L, joi.R, joi.T)
-
-        if joi.R is not None:
-            r = joi.R.walkdown()
-            while r!=joi:
-                r, nx = self.dps_flat_plot(ax, r, nx)
-
-        return joi.T, nx
-
-    def get_dendro_colors(self, labels):
-        try:
-            import seaborn as sns
-        except ImportError:
-            raise ImportError('You must install the seaborn library to draw colored labels.')
-
-        unique, counts = np.unique(labels, return_counts=True)
-        sorteds = np.argsort(counts)
-        s = len(sorteds)
-
-        i = sorteds[s - 1]
-        max_size = counts[i]
-        if unique[i] < 0:
-            max_size = counts[sorteds[s - 2]]
-
-        color_map = {}
-        palette = sns.color_palette('bright', s + 1)
-        col = 0
-        a = (1. - 0.3) / (max_size - 1)
-        b = 0.3 - a
-        while s:
-            s -= 1
-            i = sorteds[s]
-            if unique[i] < 0:  # outliers
-                color_map[unique[i]] = (0., 0., 0., 0.15)
-                continue
-            alpha = a * counts[i] + b
-            color_map[unique[i]] = palette[col] + (alpha,)
-            col += 1
-
-        return color_map
-
-    def plot(self, axis=None):
-        """Plot the dendrogram.
-
-        Parameters
-        ----------
-
-        axis : matplotlib axis, optional
-               The axis to render the plot to
-
-        Returns
-        -------
-
-        axis : matplotlib axis
-                The axis used the render the plot.
-        """
-        try:
-            import matplotlib.pyplot as plt
-        except ImportError:
-            raise ImportError('You must install the matplotlib library to plot the minimum spanning tree.')
-
-        if axis is None:
-            # axis = plt.gca()
-            # axis.set_axis_off()
-            fig = plt.figure(figsize=[130, 50])
-            axis = plt.subplot(111)
-
-
-        axis = self.draw_dendrogram(axis, self._mst_pairs, self._values, self._labels)
-
-        return axis
-
-
-class MinimumSpanningTree(object):
-    def __init__(self, mst_pairs, data, labels):
-        self._mst_pairs = mst_pairs
-        self._raw_data = data
-        self._labels = labels
+        self.clusters_pallete_ = np.zeros(len(self._raw_data), (np.double, 4))
+        self.node_colors_ = np.zeros(len(self._raw_data), (np.double, 4))
+        self.scat_ = None
+        self.quiver_ = None
+        self.quiver_colors_ = None
+        self.annotation_ = None
+        self.outlier_color_ = (0., 0., 0., 0.5)
+        self._timer_text = None
 
     def decrease_dimensions(self):
         if self._raw_data.shape[1] > 2:
@@ -266,130 +62,121 @@ class MinimumSpanningTree(object):
 
         return projection
 
-    def get_node_colors(self, labels):
-        try:
-            import seaborn as sns
-        except ImportError:
-            raise ImportError('You must install the seaborn library to draw colored labels.')
+    def get_cluster(self, e, top_dis, range_size):
+        ret_index = -1
+        while self._U.parent[e] != 0:
+            p = self._U.parent[e]
+            pc = p - self._U.get_offset()
+            if self._sizes_arr[pc] > range_size[1]:
+                break
+            if top_dis < self._values_arr[pc]:
+                break
+            if self._clusters_arr[pc] > 0:  # it is a cluster
+                if range_size[0] <= self._sizes_arr[pc]:
+                    ret_index = pc
+            e = p
+        return ret_index
 
-        unique, counts = np.unique(labels, return_counts=True)
-        sorteds = np.argsort(counts)
-        s = len(sorteds)
+    def _avg_color(self, colora, colorb):
+        color = (colora + colorb) / 2.
+        return color
 
-        i = sorteds[s - 1]
-        max_size = counts[i]
-        if unique[i] < 0:
-            max_size = counts[sorteds[s - 2]]
-
-        color_map = {}
-        palette = sns.color_palette('bright', s + 1)
-        col = 0
-        a = (1. - 0.3) / (max_size - 1)
-        b = 0.3 - a
-        while s:
-            s -= 1
-            i = sorteds[s]
-            if unique[i] < 0:  # outliers
-                color_map[unique[i]] = (0., 0., 0., 0.15)
-                continue
-            alpha = a * counts[i] + b
-            color_map[unique[i]] = palette[col] + (alpha,)
-            col += 1
-
-        return [color_map[x] for x in labels]
-
-    def fast_find(self, unionfind, n):
-        n = int(n)
-        p = unionfind[n]
-        if p == 0:
-            return n
-
-        while unionfind[p] != 0:
-            p = unionfind[p]
-
-        # label up to the root
-        while p != n:
-            temp = unionfind[n]
-            unionfind[n] = p
-            n = temp
-
-        return p
-
-    def draw_edges(self, ax, pairs, pos, cols, lw=20., alpha=0.4, vary_line_width = None):
+    def _plot_edges(self, ax, pos, node_colors, top_dis):
         try:
             from matplotlib import collections as mc
             from matplotlib.pyplot import Arrow
         except ImportError:
             raise ImportError('You must install the matplotlib library to plot the minimum spanning tree.')
 
-        min_index, max_index = min(pairs), max(pairs)
-        if min_index < 0:
-            raise ValueError('Indices should be non-negative')
+        num_edges = len(self._mst_pairs) // 2
+        start, end = pos[self._mst_pairs[num_edges//2]], pos[self._mst_pairs[num_edges//2 + 1]]
+        if self.quiver_ is None:
+            line_width = min(1., ((start[0] - end[0]) ** 2 + (start[1] - end[1]) ** 2) ** 0.5) / 2.  # медианный размер
+            x, y, u, v = [], [], [], []
+            for i in range(0, num_edges):
+                a, b = self._mst_pairs[2*i], self._mst_pairs[2*i+1]
+                start, end = pos[a], pos[b]
+                x.append(start[0])
+                y.append(start[1])
+                u.append(end[0] - start[0])
+                v.append(end[1] - start[1])
+            self.quiver_ = ax.quiver(x, y, u, v, angles='xy', scale_units='xy', scale = 1)
 
-        size = int(len(pairs) / 2 + 1)
+        if self.quiver_colors_ is None:
+            self.quiver_colors_ = np.zeros(len(self._raw_data), (np.double, 4))
+        for i in range(0, num_edges):
+            a, b = self._mst_pairs[2*i], self._mst_pairs[2*i+1]
+            color = self._avg_color(node_colors[a], node_colors[b])
+            self.quiver_colors_[i][0] = color[0]
+            self.quiver_colors_[i][1] = color[1]
+            self.quiver_colors_[i][2] = color[2]
+            self.quiver_colors_[i][3] = color[3] * 0.75
+            if self._values_arr[i] >= top_dis:
+                self.quiver_colors_[i][3] = 0.
+            self.quiver_.set_color(self.quiver_colors_)
 
-        union_size = size
-        if max_index > union_size - 1:
-            union_size = max_index + 1
-        union_size += 2
-
-        uf, sz = np.zeros(2 * union_size, dtype=int), np.ones(union_size)
-        next_label = union_size + 1
-
-        line_width = 0.5
-
-        outliner_color = (0, 0, 0, alpha)
-        clusters_color = (0, 0, 0, min(alpha*2.,1.))
-
-        min_arrow_width = 0.002
-        max_arrow_width = lw
-        max_collision = np.sqrt(union_size)
-        thick_a = (max_arrow_width - min_arrow_width) / (1. * max_collision - 1)
-        thick_b = max_arrow_width - 1. * max_collision * thick_a
-        for j in range(0, size - 1):
-            a, b = pairs[2 * j], pairs[2 * j + 1]
-            start, end = pos[a], pos[b]
-
-            color = outliner_color
-            if self._labels[a] < 0 or self._labels[b] < 0:
-                color = outliner_color
-            elif self._labels[a] == self._labels[b]:
-                color = cols[a]
-                color = (color[0], color[1], color[2], alpha)
+    def convert_labels_to_colors(self, palette, base_node_alpha):
+        different_colors = len(palette)
+        num_points = len(self._static_labels)
+        for i in range(0, num_points):
+            lbl = self._static_labels[i]
+            if lbl < 0:
+                self.clusters_pallete_[i] = self.outlier_color_
             else:
-                color = clusters_color
+                new_col = palette[lbl % different_colors]
+                self.clusters_pallete_[i][0] = new_col[0]
+                self.clusters_pallete_[i][1] = new_col[1]
+                self.clusters_pallete_[i][2] = new_col[2]
+                self.clusters_pallete_[i][3] = base_node_alpha
 
-            i = next_label - union_size
-            aa, bb = self.fast_find(uf, a), self.fast_find(uf, b)
+    def bg_colors_and_pallete(self, palette, base_node_alpha):
+        different_colors = len(palette)
+        rev_color = 0
+        num_points = len(self._raw_data)
+        size_uf = len(self._U.parent)
+        slider_sizes_bg = np.zeros(num_points + 1)
+        for i in range(num_points+1, size_uf):
+            if self._U.parent[i] == 0:
+                continue
+            cl = i - self._U.get_offset()
+            pc = self._U.parent[i] - self._U.get_offset()
+            if self._clusters_arr[pc] > 0:
+                slider_sizes_bg[self._sizes_arr[pc]] += 1
 
-            a = (uf[a] != 0) * (aa - union_size)
-            b = (uf[b] != 0) * (bb - union_size)
-            if aa!=bb:
-                uf[aa] = uf[bb] = next_label
-                next_label += 1
+            pc = self._U.parent[i] - self._U.get_offset()
+            col = self.clusters_pallete_[pc]
+            new_col = palette[rev_color]
+            # making sure that parent has different color
+            if col[0] == new_col[0] and col[1] == new_col[1] and col[2] == new_col[2]:
+                new_col = palette[rev_color]
 
-                na, nb = sz[a], sz[b]
-                sz[i] = na + nb
+            self.clusters_pallete_[pc][0] = new_col[0]
+            self.clusters_pallete_[pc][1] = new_col[1]
+            self.clusters_pallete_[pc][2] = new_col[2]
+            self.clusters_pallete_[pc][3] = base_node_alpha
 
-            size_reflection = np.sqrt(min(na, nb))
-            if vary_line_width:
-                line_width = size_reflection * thick_a + thick_b
+            rev_color += 1
+            if rev_color >= different_colors:
+                rev_color = 0
 
-            arr = Arrow(start[0], start[1], end[0] - start[0], end[1] - start[1], color=color, width=line_width)
-            ax.add_patch(arr)
+        for i in range(0, num_points+1):
+            if slider_sizes_bg[i] == 0: # making more visible on the axis
+                slider_sizes_bg[i] = np.nan
+        return slider_sizes_bg
 
-        # line_collection.set_array(self._mst[:, 2].T)
-
-    def plot(self, axis=None, node_size=40, node_color=None,
-             node_alpha=0.8, edge_alpha=0.15, edge_linewidth=8, vary_line_width=True,
+    def plot(self, static_labels=None, axis=None, interactive=True,
+             node_size=40, node_color=None,
+             node_alpha=0.8, edge_alpha=0.15, edge_linewidth=8,
              core_color='purple'):
-        """Plot the minimum spanning tree (as projected into 2D by t-SNE if required).
+        """Plot the cluster tree with slider controls.
 
         Parameters
         ----------
+        static_labels : array, optional
+                If passed - no slider widgets
 
         axis : matplotlib axis, optional
-               The axis to render the plot to
+                The axis to render the plot to
 
         node_size : int, optional (default 40)
                 The size of nodes in the plot.
@@ -407,12 +194,6 @@ class MinimumSpanningTree(object):
         edge_linewidth : float, optional (default 2)
                 The linewidth to use for rendering edges.
 
-        vary_line_width : bool, optional (default True)
-                By default, edge thickness and color depends on the size of
-                the clusters connected by it.
-                Thicker edge connects a bigger clusters.
-                Red color indicates emergence of the cluster.
-
         core_color : matplotlib color spec, optional (default 'purple')
                 Plots colors at the node centers.
                 Can be omitted by passing None.
@@ -425,128 +206,236 @@ class MinimumSpanningTree(object):
         """
         try:
             import matplotlib.pyplot as plt
+            from matplotlib.widgets import Slider, Button, RangeSlider
         except ImportError:
-            raise ImportError('You must install the matplotlib library to plot the minimum spanning tree.')
+            raise ImportError('You must install the matplotlib library to plot cluster tree.')
+
+        try:
+            import datetime
+        except ImportError:
+            raise ImportError('You must install the datetime library to plot cluster tree.')
+
+        try:
+            import seaborn as sns
+        except ImportError:
+            raise ImportError('You must install the seaborn library to draw colored labels.')
 
         if self._raw_data.shape[0] > 32767:
-            warn('Too many data points for safe rendering of a minimal spanning tree!')
+            warn('Too many data points for safe rendering of a cluster tree!')
             return None
 
-        if axis is None:
-            axis = plt.gca()
-            axis.set_axis_off()
+        self._static_labels = static_labels
 
         pos = self.decrease_dimensions()
 
-        cols = node_color
-        if node_color is None:
-            cols = self.get_node_colors(self._labels)
-            axis.scatter(pos.T[0], pos.T[1], c=cols, s=node_size, alpha=node_alpha)
+        # рисуем полотно и выводим два слайдера
+        # выводить статы по времени отрисовки
+        #   если время превышает, то выводить кнопку Апплай и выводить только при её нажатии
+        dis_slider, qty_slider, btn_apply = None, None, None
+        fig = None
+
+        different_colors = 10
+        base_node_alpha = 0.8
+
+        if self._static_labels is not None:
+            self.convert_labels_to_colors(sns.color_palette('bright', different_colors+2), base_node_alpha)
         else:
-            axis.scatter(pos.T[0], pos.T[1], c=cols, s=node_size)
+            slider_sizes_bg = self.bg_colors_and_pallete(sns.color_palette('bright', different_colors+2), base_node_alpha)
 
-        self.draw_edges(axis, self._mst_pairs, pos, cols, edge_linewidth, edge_alpha, vary_line_width)
+        def restricted_labeling(top_dis, range_size):
+            num_points = len(self._raw_data)
+            for i in range(0, num_points):
+                pc = self.get_cluster(i, top_dis, range_size)
+                if pc > 0:
+                    self.node_colors_[i] = self.clusters_pallete_[pc]
+                    # num_clusters += 1
+                else:
+                    self.node_colors_[i] = self.outlier_color_
+            return self.node_colors_
 
+        def motion_hover(event):
+            annotation_visible = self.annotation_.get_visible()
+            if event.inaxes == axmain:
+                is_contained, annotation_index = self.scat_.contains(event)
+                if is_contained:
+                    point_loc = self.scat_.get_offsets()[annotation_index['ind'][0]]
+                    self.annotation_.xy = point_loc
+                    ind = annotation_index['ind'][0]
+                    pc = self.get_cluster(ind, self._values_arr[int(dis_slider.val)]*1.0001, qty_slider.val)
+                    ss = 1
+                    cl = 0
+                    dis = 0
+                    if pc >= 0:
+                        ss = self._sizes_arr[pc]
+                        cl = self._clusters_arr[pc] + 1
+                        dis = self._values_arr[pc]
+                    text_label = 'label:' + str(pc) \
+                                 + '\n dis: {:.4f}'.format(dis) \
+                                 + '\n size: ' + str(ss) \
+                                 + '\nparts: ' + str(cl) \
+                                 + '\n(p: '+ str(ind)+')'
+                    self.annotation_.set_text(text_label)
+                    self.annotation_.set_visible(True)
+                    fig.canvas.draw_idle()
+                else:
+                    if annotation_visible:
+                        self.annotation_.set_visible(False)
+                        fig.canvas.draw_idle()
 
-        # axis.set_xticks([])
-        # axis.set_yticks([])
+        def update_plot(val):
+            # axis.cla()
+            now = datetime.datetime.now()
 
-        if core_color is not None:
-            # adding dots at the node centers
-            axis.scatter(pos.T[0], pos.T[1], c=core_color, marker='.', s=node_size / 10)
+            if dis_slider is None:
+                dis = np.inf
+            else:
+                dis = self._values_arr[int(dis_slider.val)]*1.0001
 
-        return axis
+            if qty_slider is None:
+                range_ = [0, np.inf]
+            else:
+                range_ = qty_slider.val
 
-    def to_numpy(self):
-        """Return a numpy array of pairs of from and to in the minimum spanning tree
-        """
-        return self._mst_pairs.copy()
+            if self._static_labels is None:
+                cc = restricted_labeling(dis, range_)
+            else:
+                cc = self.clusters_pallete_
 
-    def to_pandas(self):
-        """Return a Pandas dataframe of the minimum spanning tree.
+            if self._mst_pairs is not None:
+                self._plot_edges(axmain, pos, cc, dis)  # edge_linewidth, edge_alpha, vary_line_width)
 
-        Each row is an edge in the tree; the columns are `from` and `to`
-        which are indices into the dataset
-        """
-        try:
-            from pandas import DataFrame
-        except ImportError:
-            raise ImportError('You must have pandas installed to export pandas DataFrames')
+            if self.scat_ is None:
+                self.scat_ = axmain.scatter(pos.T[0], pos.T[1], c=cc, s=node_size, alpha=node_alpha)
+                axmain.set_axis_off()
 
-        result = DataFrame({'from': self._mst_pairs[::2].astype(int),
-                            'to': self._mst_pairs[1::2].astype(int),
-                            'distance': None})
-        return result
+                if fig is not None and self._static_labels is None:
+                    self.annotation_ = axmain.annotate(
+                        text='',
+                        xy=(0,0),
+                        xytext=(10,15),
+                        textcoords='offset points',
+                        bbox={'boxstyle': 'round', 'fc': 'w'},
+                        arrowprops={'arrowstyle': '->'}
+                    )
+                    self.annotation_.set_visible(False)
+                    fig.canvas.mpl_connect('motion_notify_event', motion_hover)
 
-    def to_networkx(self):
-        """Return a NetworkX Graph object representing the minimum spanning tree.
+                if core_color is not None:
+                    # adding (red)dots at the node centers
+                    axmain.scatter(pos.T[0], pos.T[1], c=core_color, marker='.', s=node_size / 10)
+            else:
+                self.scat_.set_color(cc)
 
-        Nodes have a `data` attribute attached giving the data vector of the
-        associated point.
-        """
-        try:
-            from networkx import Graph, set_node_attributes
-        except ImportError:
-            raise ImportError('You must have networkx installed to export networkx graphs')
+            td = datetime.datetime.now() - now
+            if self._static_labels is None:
+                if self._timer_text is None:
+                    self._timer_text = axmain.text(0.05, 0.95, f'{td.total_seconds():.3f}' + " sec", transform=plt.gcf().transFigure,
+                                                   verticalalignment='top', horizontalalignment='left')
+                else:
+                    self._timer_text.set_text(f'{td.total_seconds():.3f}' + " sec")
+            if self.scat_ is not None and btn_apply is not None and  not axbtn.get_visible():
+                if td.total_seconds() < 3:
+                    axbtn.set_visible(False)
+                else:
+                    axbtn.set_visible(True)
 
-        result = Graph()
-        size = int(len(self._mst_pairs) / 2)
-        for i in range(0, size):
-            result.add_edge(self._mst_pairs[2 * i], self._mst_pairs[2 * i + 1])
+        if axis is not None:
+            axmain = axis
+            update_plot(None)
+            # plt.show()
+            return axmain
+        if self ._static_labels is not None:
+            # fig = plt.figure()
+            axmain = plt.gca()
+            axmain.set_axis_off()
+            update_plot(None)
+            # plt.show()
+            return axmain
 
-        data_dict = {index: tuple(row) for index, row in enumerate(self._raw_data)}
-        set_node_attributes(result, data_dict, 'data')
+        # else:
+        num_points = len(self._raw_data)
+        def update_qty_slider(val):
+            qty_slider.poly.set_xy([[0, 0], [1, 0],
+                                   [1, qty_slider.val[0]], [0, qty_slider.val[0]],
+                                   [0, qty_slider.val[1]], [1, qty_slider.val[1]],
+                                   [1, num_points], [0, num_points]])
 
-        return result
+            if val is not None and btn_apply is not None and not axbtn.get_visible():
+                update_plot(val)
+            fig.canvas.draw_idle()
+            fig.canvas.flush_events()
 
+        def update_dis_slider(val):
+            dis = self._values_arr[int(dis_slider.val)]
+            dis_slider.valtext.set_text("{:.4f}".format(dis))
+            # dis_slider.poly.set_xy([[dis_slider.val, 0.], [dis_slider.val, 2.], [num_points, 2.], [num_points, 0.]])
+            dis_slider.poly.set(xy=[dis_slider.val, 0.], height=2., width=(num_points - dis_slider.val + 1))
 
-class Frames(object):
-    def __init__(self, druhg):
-        self._druhg = druhg
+            if val is not None and btn_apply is not None and not axbtn.get_visible():
+                update_plot(val)
+            if btn_apply is None or not axbtn.get_visible():
+                fig.canvas.draw_idle()
+            fig.canvas.flush_events()
 
-    # https://matplotlib.org/stable/tutorials/introductory/animation_tutorial.html
-    def animate(self, XX, ax=None, fig=None, frames=40, interval_ms=500, xlim=[-20, 20], ylim=[-20, 20], xlabel='x', ylabel='y'):
-        try:
-            import matplotlib.pyplot as plt
-            import matplotlib.animation as animation
-        except ImportError:
-            raise ImportError('You must install the matplotlib library to animate the data.')
-        print('frames=', frames, 'interval=', interval_ms)
-        if XX.shape[0] > 32767:
-            warn('Too many data points for safe rendering!')
-            return None
+        def on_key_press(event):
+            if event.key == 'left' and dis_slider.val > 0:
+                dis_slider.set_val(dis_slider.val - 1)
+            elif event.key == 'right' and dis_slider.val < dis_slider.valmax:
+                dis_slider.set_val(dis_slider.val + 1)
 
-        self._druhg.allocate_buffers(XX)
-        self._run_times = 0
+            v1, v2 = qty_slider.val
+            if event.key == 'up' and v1+1 < v2:
+                qty_slider.set_val([v1+1, v2])
+            elif event.key == 'down' and v2 > 0:
+                qty_slider.set_val([v1 - 1, v2])
+            elif event.key == 'shift+up' and v1 < dis_slider.valmax:
+                qty_slider.set_val([v1, v2 + 1])
+            elif event.key == 'shift+down' and v1+1 < v2:
+                qty_slider.set_val([v1, v2-1])
 
-        if fig is None or ax is None:
-            fig, ax = plt.subplots()
+        def _apply(event):
+            axbtn.set_visible(False)
+            update_plot(None)
+            fig.canvas.draw_idle()
+            fig.canvas.flush_events()
 
-        time_text = ax.text(0.95, 0.01, 'frame: ',
-               verticalalignment='bottom', horizontalalignment='right',
-               transform=ax.transAxes,
-               color='green', fontsize=15)
+        fig, axs = plt.subplots(2, 2, width_ratios=[0.9, 0.1], height_ratios=[0.95, 0.05])
 
-        scat = ax.scatter(0, 0, c="b", s=5)
-        scat.set_offsets(self._druhg._buffer_data1)
-        ax.set(xlim=xlim, ylim=ylim, xlabel=xlabel, ylabel=ylabel)
+        axmain = axs[0, 0]
+        axvals = axs[1, 0]
+        axqty = axs[0, 1]
+        axbtn = axs[1, 1]
 
-        def update_frame(frame):
-            if self._run_times <= frame:
-                self._run_times += 1
+        axvals.plot(self._values_arr, scaley='log')
+        dis_slider = Slider(axvals, 'Values', valmin=0, valmax=num_points-2,
+                            valstep=1.,
+                            valinit=num_points-2,
+                            color=(0.,0.,0.9,0.2),
+                            track_color=(0.5, 0.5, 0.5, 0.05),
+                            handle_style={"": "|", "facecolor": "b", "size": 30},
+                            )
 
-                self._druhg.buffer_develop()
-                scat.set_offsets(self._druhg.new_data_)
-                time_text.set_text('frame: '+str(frame))
+        axqty.plot(slider_sizes_bg, range(0, len(slider_sizes_bg)), 'k_', scalex='log')
+        qty_slider = RangeSlider(axqty, "Qty", valmin=0, valmax=num_points,
+                                 valstep=1., orientation="vertical",
+                                 color=(0., 0., 0.9, 0.2),
+                                 track_color=(0.5, 0.5, 0.5, 0.05),
+                                 handle_style={"": "_", "facecolor": "b", "size": 30},
+        )
 
-            return (scat, time_text)
+        btn_apply = Button(axbtn, 'Apply', color='gray', hovercolor='green')
+        btn_apply.on_clicked(_apply)
+        axbtn.set_visible(False)
 
-        def empty_init():
-            pass
+        dis_slider.on_changed(update_dis_slider)
+        qty_slider.on_changed(update_qty_slider)
+        cid = fig.canvas.mpl_connect('key_press_event', on_key_press)
 
+        # init
+        update_dis_slider(None)
+        update_qty_slider(None)
+        update_plot(None)
 
-        ani = animation.FuncAnimation(fig=fig, func=update_frame, init_func=empty_init(),
-                                      frames=frames, interval=interval_ms,)
         plt.show()
 
-        return self
+        return axmain

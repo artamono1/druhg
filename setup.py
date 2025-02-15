@@ -38,7 +38,7 @@ _cyheapq = Extension('druhg._cyheapq',
 
 
 def readme():
-    with open('README.rst') as readme_file:
+    with open('README.rst', encoding='utf8') as readme_file:
         return readme_file.read()
 
 def requirements():
@@ -48,7 +48,7 @@ def requirements():
 
 configuration = {
     'name': 'druhg',
-    'version': '1.5.0',
+    'version': '1.7.1',
     'description': 'Universal clustering based on dialectical materialism',
     'long_description': readme(),
     'classifiers': [
@@ -68,7 +68,7 @@ configuration = {
         'Programming Language :: Python :: 3.8',
     ],
     'keywords': 'cluster clustering density dialectics',
-    'url': 'https://github.com/artamono/druhg',
+    'url': 'https://github.com/artamono1/druhg',
     'maintainer': 'Pavel Artamonov',
     'maintainer_email': 'druhg.p@gmail.com',
     'license': 'BSD',
