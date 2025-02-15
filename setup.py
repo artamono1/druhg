@@ -33,14 +33,12 @@ _druhg_group = Extension('druhg._druhg_group',
                          sources=['druhg/_druhg_group.pyx'])
 _druhg_label = Extension('druhg._druhg_label',
                          sources=['druhg/_druhg_label.pyx'])
-_druhg_motion = Extension('druhg._druhg_motion',
-                         sources=['druhg/_druhg_motion.pyx'])
 _cyheapq = Extension('druhg._cyheapq',
                          sources=['druhg/_cyheapq.pyx'])
 
 
 def readme():
-    with open('README.rst', encoding='Latin1') as readme_file:
+    with open('README.rst', encoding='utf8') as readme_file:
         return readme_file.read()
 
 def requirements():
@@ -50,7 +48,7 @@ def requirements():
 
 configuration = {
     'name': 'druhg',
-    'version': '1.7.0',
+    'version': '1.7.1',
     'description': 'Universal clustering based on dialectical materialism',
     'long_description': readme(),
     'classifiers': [
@@ -81,7 +79,6 @@ configuration = {
                     _druhg_tree,
                     _druhg_group,
                     _druhg_label,
-                    _druhg_motion,
                     _cyheapq
                     ],
     'zip_safe': False,
