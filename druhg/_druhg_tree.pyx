@@ -19,7 +19,7 @@ from ._druhg_unionfind import UnionFind
 from ._druhg_unionfind cimport UnionFind
 
 import _heapq as heapq
-from ._cyheapq import merge as heapq_merge
+# from ._cyheapq import merge as heapq_merge
 
 from libc.math cimport fabs, pow
 import bisect
@@ -300,61 +300,47 @@ cdef class UniversalReciprocity (object):
             return 1
         return 0
 
-    cdef bint _evaluate_reciprocity(self, np.intp_t i, np.ndarray[np.intp_t, ndim=2] knn_indices, np.ndarray[np.double_t, ndim=2] knn_dist, Relation* rel):
+    cdef bint _evaluate_reciprocity(self, np.intp_t i, np.intp_t parent, np.ndarray[np.intp_t, ndim=2] knn_indices, np.ndarray[np.double_t, ndim=2] knn_dist, Relation* rel):
         cdef:
-            np.intp_t j, ranki, skip_first, \
-                parent, \
-                rank, orank, \
+            int ranki, rank, orank
+            np.intp_t j, \
                 res = 0
 
             np.double_t best, v, \
                 dis, odis
 
-            np.ndarray indices, ind_opp
-            np.ndarray distances, dis_opp
+            np.intp_t[:] indices
+            np.double_t[:] distances
 
-        skip_first = rel.skip_first
-
-        parent = self.U.mark_up(i)
-        indices, distances = knn_indices[i], knn_dist[i]
+        indices: np.intp_t[:] = knn_indices[i]
+        distances: np.double_t[:] = knn_dist[i]
 
         best = INF
-        rel.reciprocity = best
-        for ranki in range(skip_first, self.max_neighbors_search + 1):
-            j = indices[ranki]
+        for ranki in range(1, self.max_neighbors_search + 1):
             dis = distances[ranki]
-
             if dis - self.PRECISION > best:
                 break
 
+            j = indices[ranki]
             if self.U.is_same_parent(parent, j):
-                rel.skip_first += ranki == rel.skip_first
                 continue
-
-            orank = bisect.bisect(knn_dist[j], dis + self.PRECISION)  # !reminder! bisect.bisect(odis, dis) >= bisect.bisect_left(odis, dis)
-            odis = distances[orank-1]
-
             rank = bisect.bisect(distances, dis + self.PRECISION)
+            orank = bisect.bisect(knn_dist[j], dis + self.PRECISION)  # !reminder! bisect.bisect(odis, dis) >= bisect.bisect_left(odis, dis)
             if rank > orank:
                 continue
 
-            v = dis * orank / (1.*rank)
-            r = orank
-            if odis < v: # evaluates from POV of the i and the opp
-                v = odis
-                r = rank
+            odis = distances[orank-1]
+            v = min(odis, dis * orank / (1.*rank)) # evaluates from POV of the i and the opp
 
             if v >= best:
                 continue
 
             best = v
-            rel.reciprocity = best
             rel.endpoint = j
-            # rel.max_rank = orank/rank
-            rel.max_rank = r
+            rel.max_rank = orank
 
             res = 1
-
+        rel.reciprocity = best
         return res
 
     cdef _compute_tree_edges(self):
@@ -411,11 +397,8 @@ cdef class UniversalReciprocity (object):
                 print ('Distances cannot be negative! Exiting. ', i, knn_dist[i][0])
                 return
             if self._pure_reciprocity(i, knn_indices, knn_dist, &rel, &infinitesimal):
-                # print('pure', rel.max_rank, knn_dist[i][1:rel.max_rank+1])
                 self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank)
-
-                p = self.U.mark_up(i)
-                op = self.U.mark_up(rel.endpoint)
+                p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
                 self.U.union(i, rel.endpoint, p, op)
 
                 if rel.reciprocity == 0.: # values match
@@ -426,10 +409,9 @@ cdef class UniversalReciprocity (object):
                     i += 1  # need to relaunch same index
                     continue
 
-            rel.skip_first = 1
-            if self._evaluate_reciprocity(i, knn_indices, knn_dist, &rel):
+            if self._evaluate_reciprocity(i, self.U.mark_up(i), knn_indices, knn_dist, &rel):
                 heapq.heappush(heap,
-                               (rel.reciprocity, i, rel.endpoint, rel.max_rank, rel.skip_first))
+                               (rel.reciprocity, i, rel.endpoint, rel.max_rank))
 
         if self.result_edges >= self.num_points - 1:
             print ('Two subjects only')
@@ -446,17 +428,17 @@ cdef class UniversalReciprocity (object):
         edge_cases = 0
 ############
         while self.result_edges < self.num_points - 1 and heap:
-            rel.reciprocity, i, rel.endpoint, rel.max_rank, rel.skip_first = heapq.heappop(heap)
+            rel.reciprocity, i, rel.endpoint, rel.max_rank = heapq.heappop(heap)
 
             p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
             if p != op:
                 self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank)
-                self.U.union(i, rel.endpoint, p, op)
+                p = self.U.union(i, rel.endpoint, p, op)
                 if rel.max_rank == self.max_neighbors_search:
                     edge_cases+=1
 
-            if self._evaluate_reciprocity(i, knn_indices, knn_dist, &rel):
-                heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank, rel.skip_first))
+            if self._evaluate_reciprocity(i, p, knn_indices, knn_dist, &rel):
+                heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
 ###############
         if self.result_edges != self.num_points - 1:
             print (str(
