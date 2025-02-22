@@ -26,6 +26,7 @@ from ._druhg_tree import UniversalReciprocity
 from ._druhg_label import Clusterizer
 
 from .plots import ClusterTree
+import time
 
 # memory allocations
 from ._druhg_unionfind import allocate_unionfind_pair
@@ -38,6 +39,8 @@ BALLTREE_VALID_METRICS = KDTREE_VALID_METRICS + ["braycurtis", "canberra", "dice
                                                  "mahalanobis", "rogerstanimoto", "russellrao", "seuclidean",
                                                  "sokalmichener", "sokalsneath",]
 FAST_METRICS = KDTREE_VALID_METRICS + BALLTREE_VALID_METRICS + ["cosine", "arccos"]
+
+
 
 def druhg(X, max_ranking=16,
           do_labeling=True,
@@ -272,7 +275,6 @@ def druhg(X, max_ranking=16,
                               buffer_ranks=buffer_ranks,
                               buffer_edgepairs=buffer_mst,
                               **kwargs)
-
     buffer_values, buffer_uf = ur.get_buffers() # no need in getting it
     if do_labeling:
         clusterizer = Clusterizer(buffer_uf, size, buffer_values, X, buffer_clusters, buffer_sizes, buffer_groups)
@@ -539,14 +541,14 @@ class DRUHG(BaseEstimator, ClusterMixin):
         else:
             raise AttributeError('No minimum spanning tree was generated. Need ``do_edges=True``.')
 
-    def plot(self, static_labels=None, axis=None):
+    def plot(self, static_labels=None, axis=None, **kwargs):
         if self._raw_data is not None:
             return ClusterTree(self.uf_,
                                self._raw_data,
                                self.values_,
                                self.sizes_,
                                self.clusters_,
-                               self.mst_).plot(static_labels=static_labels, axis=axis)
+                               self.mst_).plot(static_labels=static_labels, axis=axis, **kwargs)
         else:
             warn('No raw data is available.')
             return None

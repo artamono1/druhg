@@ -54,11 +54,14 @@ It will build the tree and label the points. Now you can manipulate clusters by 
 
 .. code:: python
 
-             labels = dr.relabel(size_range==[1, len(XX)/2], fix_outliers=1)
+             labels = dr.relabel(exclude=[7749, 100], size_range==[0.2, 2242], fix_outliers=1)
              ari = adjusted_rand_score(iris['target'], labels)
              print ('iris ari', ari)
 
-It will relabel the clusters, by restricting their size.
+Relabeling is cheap.
+ - ``exclude`` breaks clusters by label number,
+ - ``size_range`` restricts cluster size by percent or by absolute number,
+ - ``fix_outliers`` colors outliers by connectivity. 
 
 .. code:: python
 
