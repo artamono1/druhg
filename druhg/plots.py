@@ -40,7 +40,7 @@ class ClusterTree(object):
         self.quiver_ = None
         self.quiver_colors_ = None
         self.annotation_ = None
-        self.outlier_color_ = (0., 0., 0., 0.5)
+        self.outlier_color_ = None
         self._timer_text = None
 
     def decrease_dimensions(self):
@@ -236,12 +236,6 @@ class ClusterTree(object):
 
         different_colors = 10
         base_node_alpha = 0.8
-
-        if self._static_labels is not None:
-            self.convert_labels_to_colors(sns.color_palette('bright', different_colors+2), base_node_alpha)
-        else:
-            slider_sizes_bg = self.bg_colors_and_pallete(sns.color_palette('bright', different_colors+2), base_node_alpha)
-
         def restricted_labeling(top_dis, range_size):
             num_points = len(self._raw_data)
             for i in range(0, num_points):
@@ -253,7 +247,7 @@ class ClusterTree(object):
                     self.node_colors_[i] = self.outlier_color_
             return self.node_colors_
 
-        def motion_hover(event):
+        def on_pick(event):
             annotation_visible = self.annotation_.get_visible()
             if event.inaxes == axmain:
                 is_contained, annotation_index = self.scat_.contains(event)
@@ -314,11 +308,12 @@ class ClusterTree(object):
                         xy=(0,0),
                         xytext=(10,15),
                         textcoords='offset points',
-                        bbox={'boxstyle': 'round', 'fc': 'w'},
+                        bbox={'boxstyle': 'round'},
                         arrowprops={'arrowstyle': '->'}
                     )
                     self.annotation_.set_visible(False)
-                    fig.canvas.mpl_connect('motion_notify_event', motion_hover)
+                    # fig.canvas.mpl_connect('motion_notify_event', motion_hover)
+                    fig.canvas.mpl_connect('button_press_event', on_pick)
 
                 if core_color is not None:
                     # adding (red)dots at the node centers
@@ -341,19 +336,33 @@ class ClusterTree(object):
 
         if axis is not None:
             axmain = axis
-            update_plot(None)
-            # plt.show()
-            return axmain
-        if self ._static_labels is not None:
+        elif self ._static_labels is not None:
             # fig = plt.figure()
             axmain = plt.gca()
             axmain.set_axis_off()
+        else:
+            fig, axs = plt.subplots(2, 2, width_ratios=[0.9, 0.1], height_ratios=[0.95, 0.05])
+            axmain = axs[0, 0]
+
+        self.outlier_color_ = axmain.get_facecolor()
+        self.outlier_color_ = (1. - self.outlier_color_[0], 1. - self.outlier_color_[1], 1. - self.outlier_color_[2], 0.5)
+
+        if self._static_labels is not None:
+            self.convert_labels_to_colors(sns.color_palette('bright', different_colors+2), base_node_alpha)
+        else:
+            slider_sizes_bg = self.bg_colors_and_pallete(sns.color_palette('bright', different_colors+2), base_node_alpha)
+
+        if axis is not None or self ._static_labels is not None:
             update_plot(None)
             # plt.show()
             return axmain
 
-        # else:
+        # dynamic with sliders
+        axvals = axs[1, 0]
+        axqty = axs[0, 1]
+        axbtn = axs[1, 1]
         num_points = len(self._raw_data)
+
         def update_qty_slider(val):
             qty_slider.poly.set_xy([[0, 0], [1, 0],
                                    [1, qty_slider.val[0]], [0, qty_slider.val[0]],
@@ -399,31 +408,24 @@ class ClusterTree(object):
             fig.canvas.draw_idle()
             fig.canvas.flush_events()
 
-        fig, axs = plt.subplots(2, 2, width_ratios=[0.9, 0.1], height_ratios=[0.95, 0.05])
-
-        axmain = axs[0, 0]
-        axvals = axs[1, 0]
-        axqty = axs[0, 1]
-        axbtn = axs[1, 1]
-
-        axvals.plot(self._values_arr, scaley='log')
+        axvals.plot(self._values_arr, scaley='log', color=self.outlier_color_)
         dis_slider = Slider(axvals, 'Values', valmin=0, valmax=num_points-2,
                             valstep=1.,
                             valinit=num_points-2,
-                            color=(0.,0.,0.9,0.2),
+                            color=(self.outlier_color_[0],self.outlier_color_[1],self.outlier_color_[2], 0.2),
                             track_color=(0.5, 0.5, 0.5, 0.05),
-                            handle_style={"": "|", "facecolor": "b", "size": 30},
+                            handle_style={"": "|", "size": 30},
                             )
 
-        axqty.plot(slider_sizes_bg, range(0, len(slider_sizes_bg)), 'k_', scalex='log')
+        axqty.plot(slider_sizes_bg, range(0, len(slider_sizes_bg)), 'k_', scalex='log', color=self.outlier_color_)
         qty_slider = RangeSlider(axqty, "Qty", valmin=0, valmax=num_points,
                                  valstep=1., orientation="vertical",
-                                 color=(0., 0., 0.9, 0.2),
+                                 color=(self.outlier_color_[0],self.outlier_color_[1],self.outlier_color_[2],0.2),
                                  track_color=(0.5, 0.5, 0.5, 0.05),
-                                 handle_style={"": "_", "facecolor": "b", "size": 30},
+                                 handle_style={"": "_", "size": 30},
         )
 
-        btn_apply = Button(axbtn, 'Apply', color='gray', hovercolor='green')
+        btn_apply = Button(axbtn, 'Run', color='gray', hovercolor='green')
         btn_apply.on_clicked(_apply)
         axbtn.set_visible(False)
 
