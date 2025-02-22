@@ -27,7 +27,7 @@ cdef class UnionFind (object):
         self.parent = NULL
 
         self.fast_arr = buffer_fast
-        self.fast = NULL
+        # self.fast = NULL
 
         if buffer_parents is None:
             print('ERROR: buffer was not provided')
@@ -44,7 +44,8 @@ cdef class UnionFind (object):
             print('ERROR: fast_arr is too small', len(self.fast_arr), N)
             return
         else:
-            self.fast = (<np.intp_t *> self.fast_arr.data)
+            # self.fast = (<np.intp_t *> self.fast_arr.data)
+            self.fast : np.intp_t[:] = self.fast_arr
 
     cdef np.intp_t get_offset(self):
         return self.p_size + 1
@@ -57,7 +58,6 @@ cdef class UnionFind (object):
             self.fast[i] = i
 
     cdef np.intp_t mark_up(self, np.intp_t n):
-        assert self.fast != NULL
         cdef np.intp_t p
 
         p = self.fast[n]
@@ -69,7 +69,6 @@ cdef class UnionFind (object):
         return p
 
     cdef np.intp_t is_same_parent(self, np.intp_t p, np.intp_t on):
-        assert self.fast != NULL
         cdef np.intp_t op
         op = self.fast[on]
 
@@ -77,9 +76,10 @@ cdef class UnionFind (object):
             return 1
         return p == self.mark_up(on)
 
-    cdef void union(self, np.intp_t n, np.intp_t on, np.intp_t p, np.intp_t op):
-        assert self.fast != NULL
-        self.fast[n] = self.fast[on] = self.next_label
-        self.parent[p] = self.parent[op] = self.next_label
+    cdef np.intp_t union(self, np.intp_t n, np.intp_t on, np.intp_t p, np.intp_t op):
+        pp = self.next_label
+        self.fast[n] = self.fast[on] = pp
+        self.parent[p] = self.parent[op] = pp
 
         self.next_label += 1
+        return pp
