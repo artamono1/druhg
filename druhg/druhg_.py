@@ -459,7 +459,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
 
         if printout:
             print('Relabeling using defaults for: ' + printout)
-        print('actual size', self._size)
+
         clusterizer = Clusterizer(self.uf_, self._size, self.values_, self._raw_data,
                                   self.clusters_, self.sizes_, self.groups_)
 
