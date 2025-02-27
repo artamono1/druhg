@@ -61,7 +61,7 @@ It will build the tree and label the points. Now you can manipulate clusters by 
 Relabeling is cheap.
  - ``exclude`` breaks clusters by label number,
  - ``size_range`` restricts cluster size by percent or by absolute number,
- - ``fix_outliers`` colors outliers by connectivity. 
+ - ``fix_outliers`` colors outliers by connectivity.
 
 .. code:: python
 
