@@ -222,8 +222,10 @@ cdef class UniversalReciprocity (object):
         self._compute_tree_edges()
 
     cpdef tuple get_tree(self):
-        return self.result_values_arr[:self.result_edges * 2], self.result_pairs_arr[:self.result_edges*2].astype(int),\
-               self.result_rank_arr[:self.result_edges*2].astype(int)
+        return self.result_values_arr[:self.result_edges * 2], self.result_pairs_arr[:self.result_edges*2].astype(int)
+
+    cpdef np.intp_t get_num_edges(self): # Small k-nn can result in missing edges
+        return self.result_edges
 
     cpdef tuple get_buffers(self):
         return self.result_values_arr, self.U.parent_arr
@@ -444,6 +446,11 @@ cdef class UniversalReciprocity (object):
             print (str(
                 self.num_points - 1 - self.result_edges) + ' not connected edges of', self.num_points - 1,'. It is a forest. Try increasing max_neighbors(max_ranking) value ' + str(
                 self.max_neighbors_search) + ' for a better result.')
+            if self.result_pairs_arr is not None:
+                self.result_pairs_arr[2 * self.result_edges] = -1
+                self.result_pairs_arr[2 * self.result_edges + 1] = -1
+            self.result_values_arr[self.result_edges] = -1
+
         if self.max_neighbors_search < self.num_points - 1 and edge_cases != 0:
             # todo: may be check the actual reachability of indices?
             print (str(edge_cases) + ' edges with the max rank. Try increasing max_neighbors(max_ranking) value '+ str(

@@ -22,11 +22,8 @@ from warnings import warn
 from joblib.parallel import cpu_count
 
 from ._druhg_tree import UniversalReciprocity
-
 from ._druhg_label import Clusterizer
-
 from .plots import ClusterTree
-import time
 
 # memory allocations
 from ._druhg_unionfind import allocate_unionfind_pair
@@ -276,6 +273,7 @@ def druhg(X, max_ranking=16,
                               buffer_edgepairs=buffer_mst,
                               **kwargs)
     buffer_values, buffer_uf = ur.get_buffers() # no need in getting it
+    num_edges = ur.get_num_edges()
     if do_labeling:
         clusterizer = Clusterizer(buffer_uf, size, buffer_values, X, buffer_clusters, buffer_sizes, buffer_groups)
         buffer_clusters, buffer_sizes = clusterizer.emerge()
@@ -285,6 +283,7 @@ def druhg(X, max_ranking=16,
         return (buffer_labels,
                 buffer_values, buffer_ranks, buffer_uf,
                 buffer_groups, buffer_mst, buffer_sizes, buffer_clusters,
+                num_edges
                 )
     out_data = develop(buffer_values, buffer_ranks, buffer_uf, size, buffer_groups, X, buffer_out,  **kwargs)
 
@@ -320,6 +319,8 @@ class DRUHG(BaseEstimator, ClusterMixin):
         # self._outlier_scores = None
         # self._prediction_data = None
         self._size = 0
+        self.num_edges_ = 0
+
         self._raw_data = None
         self.uf_ = None
         self.labels_ = None
@@ -372,7 +373,8 @@ class DRUHG(BaseEstimator, ClusterMixin):
          self.groups_,
          self.mst_,
          self.sizes_,
-         self.clusters_
+         self.clusters_,
+         self.num_edges_
          ) = druhg(X, **kwargs)
 
         return self
@@ -457,7 +459,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
 
         if printout:
             print('Relabeling using defaults for: ' + printout)
-
+        print('actual size', self._size)
         clusterizer = Clusterizer(self.uf_, self._size, self.values_, self._raw_data,
                                   self.clusters_, self.sizes_, self.groups_)
 
@@ -548,7 +550,9 @@ class DRUHG(BaseEstimator, ClusterMixin):
                                self.values_,
                                self.sizes_,
                                self.clusters_,
-                               self.mst_).plot(static_labels=static_labels, axis=axis, **kwargs)
+                               self.mst_,
+                               self.num_edges_
+                               ).plot(static_labels=static_labels, axis=axis, **kwargs)
         else:
             warn('No raw data is available.')
             return None
