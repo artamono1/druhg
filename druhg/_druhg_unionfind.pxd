@@ -13,7 +13,7 @@ import numpy as np
 cimport numpy as np
 
 
-cdef class UnionFind (object):
+cdef class UnionFind:
     cdef:
         np.intp_t p_size
         np.ndarray parent_arr
@@ -24,10 +24,10 @@ cdef class UnionFind (object):
 
         np.intp_t next_label
 
-    cdef np.intp_t get_offset(self)
+    cdef: 
+        np.intp_t get_offset(self)
+        np.intp_t nullify(self)
 
-    cdef np.intp_t nullify(self)
-
-    cdef np.intp_t mark_up(self, np.intp_t n)
-    cdef np.intp_t is_same_parent(self, np.intp_t p, np.intp_t on)
-    cdef np.intp_t union(self, np.intp_t n, np.intp_t on, np.intp_t p, np.intp_t op)
+        np.intp_t mark_up(self, np.intp_t n)
+        np.intp_t is_same_parent(self, np.intp_t p, np.intp_t on)
+        np.intp_t union(self, np.intp_t n, np.intp_t on, np.intp_t p, np.intp_t op)

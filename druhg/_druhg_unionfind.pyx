@@ -17,11 +17,11 @@ def allocate_unionfind_pair(np.intp_t N):
     buffer_fast = np.zeros(N, dtype=np.intp) # is used only in the first phase for the fast access
     return buffer_parents, buffer_fast
 
-cdef class UnionFind (object):
+cdef class UnionFind:
 
     def __init__(self, np.intp_t N, buffer_parents, buffer_fast=None):
         self.p_size = N
-        self.next_label = N + 1
+        self.next_label = N + 1 
 
         self.parent_arr = buffer_parents
         self.parent = NULL
@@ -51,8 +51,10 @@ cdef class UnionFind (object):
         return self.p_size + 1
 
     cdef np.intp_t nullify(self):
+        cdef np.intp_t i
+
         self.parent_arr[:2 * self.p_size] = 0
-        i = self.p_size
+        i = self.p_size 
         while i!=0:
             i -= 1
             self.fast[i] = i
@@ -77,6 +79,8 @@ cdef class UnionFind (object):
         return p == self.mark_up(on)
 
     cdef np.intp_t union(self, np.intp_t n, np.intp_t on, np.intp_t p, np.intp_t op):
+        cdef np.intp_t pp
+        
         pp = self.next_label
         self.fast[n] = self.fast[on] = pp
         self.parent[p] = self.parent[op] = pp

@@ -33,6 +33,10 @@ _druhg_group = Extension('druhg._druhg_group',
                          sources=['druhg/_druhg_group.pyx'])
 _druhg_label = Extension('druhg._druhg_label',
                          sources=['druhg/_druhg_label.pyx'])
+_druhg_group_placement = Extension('druhg._druhg_group_placement',
+                         sources=['druhg/_druhg_group_placement.pyx'])
+_druhg_displacement = Extension('druhg._druhg_displacement',
+                         sources=['druhg/_druhg_displacement.pyx'])
 
 def readme():
     with open('README.rst', encoding='utf8') as readme_file:
@@ -45,7 +49,7 @@ def requirements():
 
 configuration = {
     'name': 'druhg',
-    'version': '1.7.4',
+    'version': '1.8.1',
     'description': 'Universal clustering based on dialectical materialism',
     'long_description': readme(),
     'classifiers': [
@@ -61,8 +65,7 @@ configuration = {
         'Operating System :: POSIX',
         'Operating System :: Unix',
         'Operating System :: MacOS',
-        'Programming Language :: Python :: 2.7',
-        'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3.10',
     ],
     'keywords': 'cluster clustering density dialectics',
     'url': 'https://github.com/artamono1/druhg',
@@ -74,13 +77,15 @@ configuration = {
     'ext_modules': [
                     _druhg_unionfind,
                     _druhg_tree,
-                    _druhg_group,
-                    _druhg_label
+                    _druhg_group,                    
+                    _druhg_label,
+                    _druhg_group_placement,
+                    _druhg_displacement
                     ],
     'zip_safe': False,
     'cmdclass': {'build_ext': CustomBuildExtCommand},
     'tests_require': ['pytest'],
-    'data_files': ('druhg/_druhg_unionfind.pxd', 'druhg/_druhg_group.pxd', 'druhg/_druhg_tree.pxd',)
+    'data_files': ('druhg/_druhg_unionfind.pxd', 'druhg/_druhg_tree.pxd', 'druhg/_druhg_group.pxd', 'druhg/_druhg_group_placement.pxd', 'druhg/_druhg_label.pxd',)
 }
 
 if not HAVE_CYTHON:

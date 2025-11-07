@@ -353,7 +353,7 @@ cdef class UniversalReciprocity (object):
             np.intp_t i, \
                 warn, infinitesimal
 
-            Relation rel = Relation(0,0,0,0)
+            Relation rel = Relation(0,0,0,0, 0,0)
 
             np.ndarray[np.double_t, ndim=2] knn_dist
             np.ndarray[np.intp_t, ndim=2] knn_indices

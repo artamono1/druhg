@@ -10,30 +10,47 @@ DRUHG
 =====
 
 | DRUHG - Dialectical Reflection Universal Hierarchical Grouping (друг).
-| Performs clustering based on densities and builds a minimum spanning tree.
-| **Does not require parameters.** *(The parameter is space metric, e.x. euclidean)*
-| The user can filter the size of the clusters with ``size_range``, for genuine result and genuine outliers set to [1,1].
+| Performs clustering based on densities, catches global outliers and allows visual cluster hierarchy navigation.
+| **Does not require parameters.** *(The parameter is metric of space, e.x. euclidean)*
+| The user can filter the size of the clusters with ``size_range``, for genuine result/outliers set to [1,1].
 | Parameter ``fix_outliers`` allows to label outliers to their closest clusters via mstree edges.
 
 -------------
 Basic Concept
 -------------
 
-| There are some optional tuning parameters but the actual algorithm requires none and is universal.
-| It works by applying **the universal society rule: treat others how you want to be treated**.
-| The core of the algorithm is to rank the subject's closest subjective similarities and amalgamate them accordingly.
-| Parameter ``max_ranking`` controls precision vs productivity balance, after some value the precision and the result would not change.
-| todo: Parameter ``algorithm`` can be set to 'slow' to further enhance the precision.
-|
-|
-| The **dialectical distance** reflects the opposite density.
-| Max( r/R d(r); d(R) ), where r and R are ranks from A to B and from B to A.
-| This orders outliers last and equal densities first.
-| It's great **replacement for DBSCAN** and **global outliers detection**.
-|
-| Those ordered connections become trees. Two trees reflect of each other in their totality and can transfrom into cluster.
-| D N₂ K₁/(K₁+K₂) sum 1/dᵢ > N₁ - 1, where N is size of a tree, K is number of clusters in a tree.
-| This allows newly formed clusters to resist the reshaping.
+| The algorithm works by applying **the universal society rule: treat others how you want to be treated**.
+| The A point checks surrondings of the point B and converts it in it's own point of view.
+| Each pair A,B produces **dialectical distance** max( r/R d(r); d(R) ), 
+| where r and R are amounts of points inside of balls from A to B and from B to A.
+| The closest distance wins and crystalizes into edge. Process repeats.
+
+| This orders outliers last and equal densities first. The best EDA *Exploratory Data Analysis*.
+| It's great **replacement for (H)DBSCAN** and **global outliers detection**.
+| The expensiveness O(n*n) of all points pairs evaluation is not needed, only low k-neighbors matters.
+| Therefore you can control productivity vs precision with ``max_ranking`` parameter, after some k the result converges.
+
+| **The cluster**.
+| The formula behind clusters' coloring best explain through graphs and the nature of maths objects.
+| The points *are*, the edges *connects*, and **the dictionary of key-value pairs** point-to-edge "*colors*".
+| And when two graphs connects, then two sets of points can be linked to the connecting edge.
+| 1. Both graphs clusterize to same edge, for a future connections it will be one cluster.
+| 2. One graph clusterizes, its' points link to the connecting edge. E.g. regular cluster.
+| 3. No clusterisation. Everything aggregates. The connecting edge is not pointed by any point, and it doesn't have a color.
+
+| Each graph reflects in it's rival and solves mathematical inequality:
+| D N₂ L₁ sum₁ (nᵢ-1')/nᵢdᵢ > l₁(L₁+L₂), where D - dialectical distance of connecting edge;
+| N₂ - rival's points; L₁, L₂ - unique linked edges;
+| dᵢ - dialectical distance of the pointed edge (sum is iterated over unique pointed edges L₁, not their dd values);
+| nᵢ-1' - amount of edges of one color (usually edges = points - 1, except outliers they have 1edge and 1 point);
+| thus (nᵢ-1)/nᵢdᵢ when nᵢ>1 and 1/dᵢ when nᵢ=1;
+| l₁ - amount of "colored" edges, every edge of a linked subgraph is counted, edges from no clusterisation example are not.
+
+| Newly formed cluster resists reclusterisation with it's internal high dᵢ, high l₁ and low L₁.
+| Outliers bring 1 as N₂, contribute 1 to L₂ and they are easily countered with l₁.
+| External eventually huge D or N₂ or dillution of L₁ will clusterize anything.
+| This approach is drastically different from an usual overcome 2. coefficient.
+
 
 
 ----------------
