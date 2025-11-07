@@ -18,31 +18,27 @@ from libc.math cimport fabs, pow
 
 cdef set_precision(np.double_t prec)
 
-cdef class Group (object):
+cdef class Group:
     cdef:
-        data
-        __data_length
-        _size
-        _neg_uniq_edges
+        np.ndarray data
+        np.intp_t __data_length
+        np.intp_t _size
+        np.intp_t _neg_uniq_edges # negative means it didn't cluster
         assume_data(self, data, s, ue)
-        mtn_set_like(self, ogroup)
-
-        points(self)
-        uniq_edges(self)
-        child(self, np.intp_t c, is_outlier)
-        mtn_coords(self)
-        mtn_center(self)
-        mtn_weight(self)
-
-        aggregate(self, np.double_t v, np.intp_t is_cluster1, Group group1, np.intp_t is_cluster2, Group group2)
-        mtn_aggregate(self, v, is_cluster1, group1, is_cluster2, group2)
-        mtn_subtract(self, ogroup, v)
-        add_1_autocluster(self, np.double_t border)
         cook_outlier(self, np.double_t border)
-        mtn_add_1_coords(self, coords, border)
-        mtn_set_coords(self, coords)
 
-        will_cluster(self, np.double_t border, np.double_t neg_common_coef)
-        mtn_mark_cluster(self, bint is_cluster)
-        mtn_need_cluster(self)
-        mtn_change_sum_edges(self, v)
+        bint will_cluster(self, np.double_t border, Group opp) # main formula
+
+        np.intp_t points(self)
+        np.intp_t uniq_edges(self) # returns absolute of _neg_uniq_edges
+        np.intp_t get_sibling_id(self, np.intp_t c)
+
+    @staticmethod
+    cdef np.intp_t aggregate(data, np.double_t v, np.intp_t is_cluster1, Group group1, np.intp_t is_cluster2, Group group2)
+
+    @staticmethod
+    cdef np.intp_t add_child_id_and_get_sibling(data, np.intp_t c)
+    @staticmethod
+    cdef void form_mutual_closest_2p_cluster(data, np.double_t border)
+    @staticmethod
+    cdef void set_outliers(data, np.intp_t count)        
