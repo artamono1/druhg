@@ -22,8 +22,12 @@ from warnings import warn
 from joblib.parallel import cpu_count
 
 from ._druhg_tree import UniversalReciprocity
+
 from ._druhg_label import Clusterizer
+from ._druhg_displacement import develop
+
 from .plots import ClusterTree
+from .animation import Frames
 
 # memory allocations
 from ._druhg_unionfind import allocate_unionfind_pair
@@ -274,9 +278,13 @@ def druhg(X, max_ranking=16,
                               **kwargs)
     buffer_values, buffer_uf = ur.get_buffers() # no need in getting it
     num_edges = ur.get_num_edges()
+
+    clusterizer = Clusterizer(buffer_uf, size, buffer_values, X,
+                              buffer_clusters, buffer_sizes, buffer_groups)
+    precision = kwargs.get('double_precision2', kwargs.get('double_precision', 0))
+    buffer_clusters, buffer_sizes, buffer_groups = clusterizer.emerge(precision=precision, run_motion=not do_labeling)
+
     if do_labeling:
-        clusterizer = Clusterizer(buffer_uf, size, buffer_values, X, buffer_clusters, buffer_sizes, buffer_groups)
-        buffer_clusters, buffer_sizes = clusterizer.emerge()
         buffer_labels = clusterizer.label(buffer_labels,
                        exclude=exclude, size_range=[int(limitL), int(limitH)],
                        fix_outliers=fix_outliers, edgepairs_arr=buffer_mst, **kwargs)
@@ -285,7 +293,8 @@ def druhg(X, max_ranking=16,
                 buffer_groups, buffer_mst, buffer_sizes, buffer_clusters,
                 num_edges
                 )
-    out_data = develop(buffer_values, buffer_ranks, buffer_uf, size, buffer_groups, X, buffer_out,  **kwargs)
+    out_data = develop(buffer_values, buffer_uf, size,
+                       buffer_groups, X, buffer_sizes, buffer_clusters,  buffer_out,  **kwargs)
 
     return (out_data,
             buffer_values, buffer_ranks, buffer_uf,
@@ -476,8 +485,14 @@ class DRUHG(BaseEstimator, ClusterMixin):
         kwargs.update(self._metric_kwargs)
 
         (self.new_data_,
-         self.values_, self.ranks_, self._buffer_uf,
-         self._buffer_uf, _, self.mst_, self.sizes_, self.clusters_) = druhg(self._buffer_data1, do_labeling=False,
+         self.values_,
+         self.ranks_,
+         self.uf_,
+         self.groups_,
+         self.mst_,
+         self.sizes_,
+         self.clusters_
+         ) = druhg(self._buffer_data1, do_labeling=False,
                                   buffer_values=self._buffer_values, buffer_ranks=self._buffer_ranks,
                                   buffer_uf=self._buffer_uf, buffer_uf_fast=self._buffer_uf_fast,
                                   buffer_out=self._buffer_data2,
@@ -526,6 +541,13 @@ class DRUHG(BaseEstimator, ClusterMixin):
             self._buffer_sizes = allocate_buffer_sizes(self._size)
 
         return self
+
+    @property
+    def frames_(self, **kwargs):
+        kwargs = self.get_params()
+        kwargs.update(self._metric_kwargs)
+
+        return Frames(self)
 
     @property
     def single_linkage_(self):
