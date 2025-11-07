@@ -38,7 +38,6 @@ def allocate_buffer_groups(np.intp_t size, np.intp_t n_dim=0):
         fields.append(("sum_vector_shift", np.double, n_dim))
         fields.append(("densities", np.double)) #  di/ni sum per linked
 
-
     dtype = np.dtype(fields, align=True)
     return np.empty(size, dtype=dtype)
 
@@ -58,7 +57,7 @@ cdef class Group:
         self._size = 0
         self._neg_uniq_edges = 0 # edges are negative until proven clusters
 
-    cdef assume_data(self, data, s, ue): # плохо сделано, надо отдельный метод
+    cdef assume_data(self, data, np.intp_t s, np.intp_t ue): # плохо сделано, надо отдельный метод
         self.data = data
         self._size = s
         self._neg_uniq_edges = ue
@@ -81,7 +80,7 @@ cdef class Group:
         return sibling_id 
 
     @staticmethod
-    cdef np.intp_t aggregate(data, np.double_t v, np.intp_t is_cluster1, Group group1, np.intp_t is_cluster2, Group group2):
+    cdef np.intp_t aggregate(data, np.double_t v, bint is_cluster1, Group group1, bint is_cluster2, Group group2):
         cdef np.intp_t i, res
 
         # self._size = group1._size + group2._size
