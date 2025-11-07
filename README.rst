@@ -32,7 +32,7 @@ Basic Concept
 
 | **The cluster**.
 | The formula behind clusters' coloring best explain through graphs and the nature of maths objects.
-| The points *are*, the edges *connects*, and **the dictionary of key-pairs** point-to-edge "*colors*".
+| The points *are*, the edges *connects*, and **the dictionary of key-value pairs** point-to-edge "*colors*".
 | And when two graphs connects, then two sets of points can be linked to the connecting edge.
 | 1. Both graphs clusterize to same edge, for a future connections it will be one cluster.
 | 2. One graph clusterizes, its' points link to the connecting edge. E.g. regular cluster.
