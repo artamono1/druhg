@@ -1,1 +1,1 @@
-from .druhg_ import DRUHG, druhg
+from .druhg_ import DRUHG, druhg, Buffer

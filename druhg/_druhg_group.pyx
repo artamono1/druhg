@@ -12,34 +12,12 @@
 import numpy as np
 cimport numpy as np
 
-from libc.math cimport fabs, pow
-
-cdef:
-    int _IDX_SUM_EDGES_OVER_ESTIMATES = 0 #  ni-1⁰ / nidi sum per linked
-    int _IDX_COUNT_OUTLIERS = 1 # one edge with one point
-    int _IDX_UF_BOTH_CHILDREN = 2 # storing id+id
+import logging
 
 cdef np.double_t _group_PRECISION = 0.0000001
 
 cdef set_precision(np.double_t prec):
     _group_PRECISION = prec
-
-def allocate_buffer_groups(np.intp_t size, np.intp_t n_dim=0):
-    fields = [
-              ("sum_edges_over_estimates", np.double),  #  ni-1⁰ / nidi sum per linked
-              ("count_outliers", np.intp),  # one edge with one point
-              ("both_children_id", np.intp),
-     ]
-    if n_dim != 0: # for motion
-        fields.append(("sum_edges", np.double))
-        fields.append(("sum_original_edges", np.double))
-        fields.append(("sum_coords", np.double, n_dim))
-        fields.append(("sum_cluster_coords", np.double, n_dim))
-        fields.append(("sum_vector_shift", np.double, n_dim))
-        fields.append(("densities", np.double)) #  di/ni sum per linked
-
-    dtype = np.dtype(fields, align=True)
-    return np.empty(size, dtype=dtype)
 
 def allocate_buffer_clusters(np.intp_t num_points):
     return np.empty((num_points - 1), dtype=np.intp)
@@ -48,101 +26,62 @@ def allocate_buffer_sizes(np.intp_t num_points):
     return np.empty((num_points - 1), dtype=np.intp)
 
 cdef class Group:
-    # declarations are in pxd file
-    # https://cython.readthedocs.io/en/latest/src/userguide/sharing_declarations.html
-
-    def __init__(self, data):
-        self.data = data
-        self.__data_length = len(data)
-        self._size = 0
-        self._neg_uniq_edges = 0 # edges are negative until proven clusters
-
-    cdef assume_data(self, data, np.intp_t s, np.intp_t ue): # плохо сделано, надо отдельный метод
-        self.data = data
-        self._size = s
-        self._neg_uniq_edges = ue
 
     cdef np.intp_t points(self):
         return self._size
 
-    cdef np.intp_t uniq_edges(self): # edges are negative until proven clusters
-        return self._neg_uniq_edges if self._neg_uniq_edges>=0 else -self._neg_uniq_edges
+    cdef np.intp_t uniq_edges(self):  # edges are negative until proven clusters
+        return self._neg_uniq_edges if self._neg_uniq_edges >= 0 else -self._neg_uniq_edges
 
     @staticmethod
-    cdef void set_outliers(data, np.intp_t count):
-        data[_IDX_COUNT_OUTLIERS] = count
+    cdef np.intp_t will_cluster(np.intp_t size, np.intp_t edges, GroupNode* node,
+                                 np.double_t border,
+                                 np.intp_t osize, np.intp_t oedges, GroupNode* onode):
+        cdef np.intp_t is_cluster
+        assert (edges > 0 and (oedges > 0 or (oedges == 0 and osize == 1)))
+
+        if border <= 0:
+            return edges
+
+        # The edge has two sets of points. Iterate over points to get their link(cluster).
+        # Double cluster merge: uniq_edges != #clusters
+        new_form = border * osize * node.sum_reciprocals * edges
+        old_shells = 1. * (edges + oedges) * size
+        is_cluster = -edges if new_form + _group_PRECISION >= old_shells else edges
+
+        logger = logging.getLogger(__package__)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                '%.2f is_cluster %.2f %s %.1f > %.1f sum 1/di %.2f clusters %s SSS %s vs oclusters %s oSSS %s',
+                border,
+                new_form / (old_shells + _group_PRECISION),
+                abs(new_form) + _group_PRECISION >= abs(old_shells),
+                new_form, old_shells,
+                node.sum_reciprocals,
+                edges, size, oedges, osize,
+            )
+
+        return is_cluster  # negative if clustered
 
     @staticmethod
-    cdef np.intp_t add_child_id_and_get_sibling(data, np.intp_t c):
-        cdef np.intp_t sibling_id
-        sibling_id = data[_IDX_UF_BOTH_CHILDREN]
-        data[_IDX_UF_BOTH_CHILDREN] += c
-        return sibling_id 
+    cdef np.intp_t aggregate(np.intp_t size, np.intp_t edges_and_clustering, GroupNode* node,
+                              np.double_t v,
+                              np.intp_t osize, np.intp_t oedges_and_clustering, GroupNode* onode):
+        # clustering => edges_and_clustering are negative
+        # this is parent node, it is always positive # of clusters
 
-    @staticmethod
-    cdef np.intp_t aggregate(data, np.double_t v, bint is_cluster1, Group group1, bint is_cluster2, Group group2):
-        cdef np.intp_t i, res
+        cdef np.intp_t res
 
-        # self._size = group1._size + group2._size
+        res = (0 if edges_and_clustering < 0 else edges_and_clustering) \
+            + (0 if oedges_and_clustering < 0 else oedges_and_clustering) \
+            + (1 if (edges_and_clustering < 0 or oedges_and_clustering < 0) else 0)
 
-        # edges are negative until proven clusters # double clusters merge
-        res = (0 if is_cluster1 else group1._neg_uniq_edges) + (0 if is_cluster2 else group2._neg_uniq_edges) \
-                                + (-1 if (is_cluster1 or is_cluster2) else 0)
+        same_parent_points = size * (edges_and_clustering < 0) \
+                           + osize * (oedges_and_clustering < 0)
 
-        same_parent_points = group1._size * is_cluster1 + group2._size * is_cluster2
+        # 1 / di sum per linked
+        node.sum_reciprocals = (0 if edges_and_clustering < 0 else node.sum_reciprocals) \
+                             + (0 if oedges_and_clustering < 0 else onode.sum_reciprocals) \
+                             + ((1. / v) if same_parent_points != 0 else 0)
 
-        i = _IDX_SUM_EDGES_OVER_ESTIMATES #  ni-1⁰ / nidi sum per connector
-        data[i] = (0 if is_cluster1 else group1.data[i]) + (0 if is_cluster2 else group2.data[i]) \
-                       + ((1./v) if same_parent_points==1 else 0)  \
-                       + (((same_parent_points - 1.) / (v * same_parent_points)) if (is_cluster1 or is_cluster2) else 0)
-
-        i = _IDX_COUNT_OUTLIERS  # one edge with one point
-        data[i] = (0 if is_cluster1 else group1.data[i]) + (0 if is_cluster2 else group2.data[i]) \
-                       + (1. if same_parent_points == 1 else 0)
         return res
-
-    @staticmethod
-    cdef void form_mutual_closest_2p_cluster(data, np.double_t border):
-        data[_IDX_SUM_EDGES_OVER_ESTIMATES] = 0.5 / border if border!=0. else 0.
-        data[_IDX_COUNT_OUTLIERS] = 0
-
-    cdef cook_outlier(self, np.double_t border):
-        cdef np.intp_t i
-        i = self.__data_length
-        while i != 0:
-            i -= 1
-            self.data[i] = 0
-        self.data[_IDX_SUM_EDGES_OVER_ESTIMATES] = 1./border
-        self.data[_IDX_COUNT_OUTLIERS] = 1
-        self._size = 1
-        self._neg_uniq_edges = 0
-
-    cdef np.intp_t get_sibling_id(self, np.intp_t c):
-        assert c >= 0
-        return self.data[_IDX_UF_BOTH_CHILDREN] - c
-
-
-        
-    cdef bint will_cluster(self, np.double_t border, Group opp):
-        cdef bint is_cluster
-
-        # 1. Double cluster merge: _neg_uniq_edges != #clusters 
-        # 2. _IDX_SUM_EDGES_OVER_ESTIMATES = ni-1⁰ / nidi sum per linked. 
-        new_form =  self._neg_uniq_edges  * border * opp._size * self.data[_IDX_SUM_EDGES_OVER_ESTIMATES]
-        old_shells = 1. * (self._neg_uniq_edges + opp._neg_uniq_edges) \
-                     * (self._size + self.data[_IDX_COUNT_OUTLIERS] + self._neg_uniq_edges) # linked edges
-        is_cluster = new_form <= old_shells - _group_PRECISION
-
-        # print("   {:.2f}".format(border),
-        #       'is_cluster', "{:.2f}".format(new_form / old_shells),
-        #       abs(new_form) > abs(old_shells) + _group_PRECISION,
-        #       "{:.1f}".format(-new_form),
-        #       "> {:.1f}".format(-old_shells),
-        #       'sum ni-1 / nidi', "{:.2f}".format(self.data[_IDX_SUM_EDGES_OVER_ESTIMATES]),
-        #       'clusters ',  -self._neg_uniq_edges, ' SSS', self._size, ' ouls', self.data[_IDX_COUNT_OUTLIERS],
-        #       ' vs opp clusters ',  -opp._neg_uniq_edges,' SSS', opp.points(), ' ouls', opp.data[_IDX_COUNT_OUTLIERS],
-        #       'opp ni-1 / nidi'.format(opp.data[_IDX_SUM_EDGES_OVER_ESTIMATES]),
-        #       abs(new_form), abs(old_shells)
-        # )
-
-        return is_cluster

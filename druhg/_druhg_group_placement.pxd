@@ -12,29 +12,13 @@
 import numpy as np
 cimport numpy as np
 
-from libc.math cimport fabs, pow
-
-from ._druhg_group cimport Group
-
-# EXPERIMENTAL
-cdef class GroupPlacement (Group):
-  # during label aggregation
-    cdef void cook_outlier_coords(self, np.ndarray coords)
-    @staticmethod    
-    cdef void form_coords_mutual_closest_2p_cluster(data, np.double_t border, np.ndarray coords1, np.ndarray coords2)
-    @staticmethod
-    cdef void aggregate_coords(data, np.double_t v, bint is_cluster1, GroupPlacement group1, bint is_cluster2, GroupPlacement group2)
-
-  # during displacement evaluation
-    cdef: 
-        np.double_t current_linked_edge
-        np.double_t current_sum_of_linked_tree
-        void restart_current_linking(self, np.ndarray e_coords)
-        void current_clusterization_update(self, np.double_t v, GroupPlacement ogroup)
-
-        np.ndarray point_place
-
+cdef class GroupPlacement:
     cdef:
-        np.ndarray evaluate_and_add_center_shift(self, np.double_t v, GroupPlacement pgroup, GroupPlacement ogroup)
-        np.ndarray evaluate_shift(self, GroupPlacement pgroup, GroupPlacement ogroup)
-        void cook_outlier_center_shift(self, np.double_t v, GroupPlacement pgroup, GroupPlacement ogroup)
+        np.intp_t sum_ids
+        np.double_t sum_edges, net_edges, net_densities
+        np.ndarray sum_coords, net_coords, center_shift, side_shift
+
+    cdef void add_single_point(self, np.double_t v, np.intp_t id, coords)
+    cdef void add_node(self, np.double_t border, np.intp_t id, GroupPlacement node, np.intp_t size, bint is_cluster)
+    cdef np.intp_t get_sibling_id(self, np.intp_t id)
+    cdef GroupPlacement cook_outlier_coords(self, np.ndarray coords, np.ndarray center_shift, np.ndarray side_shift=?)

@@ -14,21 +14,18 @@
 import numpy as np
 cimport numpy as np
 import sys
+import logging
 
 from ._druhg_unionfind import UnionFind
 from ._druhg_unionfind cimport UnionFind
 
 import _heapq as heapq
-# from ._cyheapq import merge as heapq_merge
 
-from libc.math cimport fabs, pow
+from sklearn.neighbors import KDTree, BallTree
+from joblib import Parallel, delayed
 import bisect
 
 cdef np.double_t INF = sys.float_info.max
-
-from sklearn.neighbors import KDTree, BallTree
-# from sklearn import preprocessing
-from joblib import Parallel, delayed
 
 def allocate_buffer_values(np.intp_t num_points):
     return np.empty((num_points - 1), dtype=np.double)
@@ -79,7 +76,7 @@ cdef class PairwiseDistanceTreeSparse(object):
             knn_dist[i][0], knn_indices[i][0] = 0., i # have to add itself. Edge to itself have to be zero!
 
         if warning:
-            print ('Attention!: Sparse matrix has an edge that forms a loop! They were zeroed.', warning)
+            logging.getLogger(__package__).warning('Attention!: Sparse matrix has an edge that forms a loop! They were zeroed. '+str(warning))
 
         return knn_dist, knn_indices
 
@@ -157,14 +154,14 @@ cdef class UniversalReciprocity (object):
         np.intp_t n_jobs
 
         UnionFind U
+        set ball
 
         np.intp_t result_edges
         np.ndarray result_values_arr
         np.ndarray result_pairs_arr
         np.ndarray result_rank_arr
-
-        public np.ndarray knn_d
-        public np.ndarray knn_i
+        bint logger_debug
+        object logger
 
     def __init__(self, algorithm, tree,
                  buffer_uf, buffer_fast, buffer_values,
@@ -173,9 +170,14 @@ cdef class UniversalReciprocity (object):
                  buffer_clusters=None,
                  **kwargs):
 
-        self.PRECISION = kwargs.get('double_precision', 0.0000001) # this is only relevant if distances between datapoints are super small
-        self.n_jobs = n_jobs
+        self.logger = logging.getLogger(__package__)
+        self.logger_debug = self.logger.isEnabledFor(logging.DEBUG)
 
+        self.PRECISION = kwargs.get('double_precision', 0.0000001)  # relevant if distances are tiny
+        self.n_jobs = n_jobs
+        self.ball = set()
+
+        # TODO: replace scikit with rdist https://github.com/jackd/numba-neighbors/tree/master
         if algorithm == 0:
             self.dist_tree = tree
             self.tree = KDTree(tree.data, metric=metric, leaf_size=leaf_size, **kwargs)
@@ -197,8 +199,6 @@ cdef class UniversalReciprocity (object):
 
         self.max_neighbors_search = max_neighbors_search
 
-        # self.num_features = self.tree.data.shape[1]
-
         self.U = UnionFind(self.num_points, buffer_uf, buffer_fast)
         self.U.nullify()
 
@@ -206,17 +206,17 @@ cdef class UniversalReciprocity (object):
 
         self.result_values_arr = buffer_values
         if len(self.result_values_arr) < self.num_points - 1:
-            print('ERROR: values buffer is too small', len(self.result_values_arr), self.num_points - 1)
+            self.logger.error('ERROR: values buffer is too small '+str(len(self.result_values_arr))+' '+str(self.num_points - 1))
             return
 
         self.result_pairs_arr = buffer_edgepairs # np.empty((self.num_points*2 - 2))
         if self.result_pairs_arr is not None and len(self.result_pairs_arr) < self.num_points*2 - 2:
-            print('ERROR: edgepairs buffer is too small', len(self.result_pairs_arr), self.num_points*2 - 2)
+            self.logger.error('ERROR: edgepairs buffer is too small '+str(len(self.result_pairs_arr))+' '+str(self.num_points*2 - 2))
             return
 
         self.result_rank_arr = buffer_ranks # np.empty((self.num_points - 1))
         if self.result_rank_arr is not None and len(self.result_rank_arr) < self.num_points - 1:
-            print('ERROR: ranks buffer is too small', len(self.result_rank_arr), self.num_points - 1)
+            self.logger.error('ERROR: ranks buffer is too small '+str(len(self.result_rank_arr))+' '+str(self.num_points - 1))
             return
 
         self._compute_tree_edges()
@@ -236,39 +236,41 @@ cdef class UniversalReciprocity (object):
         i = self.result_edges
         self.result_edges += 1
         self.result_values_arr[i] = v
-        # self.result_values_arr[i] = pow(v, 2.0)
 
         if self.result_pairs_arr is not None:
             self.result_pairs_arr[2 * i] = a
             self.result_pairs_arr[2 * i + 1] = b
         if self.result_rank_arr is not None:
             self.result_rank_arr[i] = r
-        # print ('result_write', a,b, v, r)
+
+        if self.logger_debug:
+            self.logger.debug('Edge %s %s value %s rank %s', a,b, v, r)
 
 
     cdef bint _pure_reciprocity(self, np.intp_t i, np.ndarray[np.intp_t, ndim=2] knn_indices, np.ndarray[np.double_t, ndim=2] knn_dist,
                                        Relation* rel, np.intp_t* infinitesimal):
         cdef:
-            np.intp_t ranki, j, \
+            np.intp_t r, j, \
                 parent, \
                 rank
 
             np.double_t dis, core_dis
 
-            np.ndarray indices, ind_opp
-            np.ndarray distances, dis_opp
+            np.ndarray indices, oindices
+            np.ndarray distances, odistances
 
         parent = self.U.mark_up(i)
-        indices, distances = knn_indices[i], knn_dist[i]
+        indices = knn_indices[i]
+        distances = knn_dist[i]
 
         rel.reciprocity = INF
         core_dis = distances[1]
-        for ranki in range(0, self.max_neighbors_search + 1):
-            j = indices[ranki]
+        for r in range(0, self.max_neighbors_search + 1):
+            j = indices[r]
             if parent == self.U.mark_up(j):
                 continue
 
-            dis = distances[ranki]
+            dis = distances[r]
             if dis > core_dis + self.PRECISION:
                 break
 
@@ -279,22 +281,23 @@ cdef class UniversalReciprocity (object):
                 return 1
             infinitesimal += dis <= self.PRECISION
 
-            if knn_dist[j][1] + self.PRECISION < dis:
+            odistances = knn_dist[j]
+            if odistances[1] + self.PRECISION < dis:
                 return 0
 
-            # только для 2-2
-            # if bisect.bisect(distances, dis + self.PRECISION) > 2 \
-            # or bisect.bisect(knn_dist[j], dis + self.PRECISION) > 2:
-            #     return 0
-            rank = bisect.bisect(distances, dis + self.PRECISION)
+            rank = r + 1
+            while rank <= self.max_neighbors_search and distances[rank] <= dis + self.PRECISION:
+                rank += 1
 
-            # print ('core', core_dis, 'dis', dis)
-            # print('i', i, 'rank_i', rank,
-            #       'j', j, 'rank_j', bisect.bisect(knn_dist[j], dis + self.PRECISION))
-
-            if rank != bisect.bisect(knn_dist[j], dis + self.PRECISION):
+            odis = odistances[rank - 1]
+            if odis >= dis + self.PRECISION:
                 continue
-            # print ('pure')
+            if odis + self.PRECISION <= dis :
+                continue
+            if rank <= self.max_neighbors_search and odistances[rank] < dis + self.PRECISION:
+                continue
+
+            # assert(bisect.bisect(odistances, dis + self.PRECISION) == bisect.bisect(distances, dis + self.PRECISION) )
 
             rel.reciprocity = dis
             rel.endpoint = j
@@ -304,38 +307,75 @@ cdef class UniversalReciprocity (object):
 
     cdef bint _evaluate_reciprocity(self, np.intp_t i, np.intp_t parent, np.ndarray[np.intp_t, ndim=2] knn_indices, np.ndarray[np.double_t, ndim=2] knn_dist, Relation* rel):
         cdef:
-            int ranki, rank, orank
+            int rank, orank, r, inter
             np.intp_t j, \
                 res = 0
 
-            np.double_t best, v, \
-                dis, odis
+            np.double_t best, v, v1, v2, dis
 
             np.intp_t[:] indices
+            np.intp_t[:] oindices
             np.double_t[:] distances
+            np.double_t[:] odistances
 
-        indices: np.intp_t[:] = knn_indices[i]
-        distances: np.double_t[:] = knn_dist[i]
+        indices = knn_indices[i]
+        distances = knn_dist[i]
 
+        self.ball.clear()
+        self.ball.add(indices[0])
         best = INF
-        for ranki in range(1, self.max_neighbors_search + 1):
-            dis = distances[ranki]
-            if dis - self.PRECISION > best:
+        for r in range(1, self.max_neighbors_search + 1):
+
+            dis = distances[r]
+            if dis - self.PRECISION > best: # v всегда >= dis по построению
                 break
 
-            j = indices[ranki]
+            j = indices[r]
+            self.ball.add(j)
             if self.U.is_same_parent(parent, j):
                 continue
-            rank = bisect.bisect(distances, dis + self.PRECISION)
-            orank = bisect.bisect(knn_dist[j], dis + self.PRECISION)  # !reminder! bisect.bisect(odis, dis) >= bisect.bisect_left(odis, dis)
-            if rank > orank:
+            assert(dis > self.PRECISION)
+
+            rank = r + 1
+            while rank <= self.max_neighbors_search and distances[rank] <= dis + self.PRECISION:
+                self.ball.add(indices[rank])
+                rank += 1
+            rank -= 1
+
+            odistances = knn_dist[j]
+            if odistances[rank] > dis: # outlier part has more information
                 continue
 
-            odis = distances[orank-1]
-            v = min(odis, dis * orank / (1.*rank)) # evaluates from POV of the i and the opp
+            oindices: np.intp_t = knn_indices[j]
+
+            orank = 1
+            inter = 0
+            while orank <= self.max_neighbors_search and odistances[orank] <= dis + self.PRECISION:
+                inter += oindices[orank] != i and oindices[orank] in self.ball
+                orank += 1
+            orank -= 1
+
+            # assert(rank +1 == bisect.bisect(distances, dis + self.PRECISION))
+            # assert(orank +1 == bisect.bisect(odistances, dis + self.PRECISION))  # !reminder! bisect.bisect(odis, dis) >= bisect.bisect_left(odis, dis)
+
+            if rank > orank:
+                continue
+            if rank == orank and i < j:
+                continue
+
+            v1 = max(distances[orank] + self.PRECISION,  dis * rank / (orank - inter)) # со своей стороны r<=oR
+            v2 = max(odistances[rank] + self.PRECISION,  dis * orank / (rank - inter)) # с чужой стороны
+            v = min(v1, v2)
+
+            assert(v!=0)
+            assert(v+self.PRECISION>dis)
 
             if v >= best:
                 continue
+
+            if self.logger_debug:
+                self.logger.debug('%s %s new best %s < %s', i,j, v, best)
+                self.logger.debug('r %s, %s (%s) d %s (%s, %s)', rank, orank, inter, dis, distances[orank], odistances[rank])
 
             best = v
             rel.endpoint = j
@@ -396,10 +436,11 @@ cdef class UniversalReciprocity (object):
         while i:
             i -= 1
             if knn_dist[i][0] < 0.:
-                print ('Distances cannot be negative! Exiting. ', i, knn_dist[i][0])
+                self.logger.error('Distances cannot be negative! Exiting. '+str(i)+' '+str(knn_dist[i][0]))
                 return
+
             if self._pure_reciprocity(i, knn_indices, knn_dist, &rel, &infinitesimal):
-                self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank)
+                self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank - 1)
                 p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
                 self.U.union(i, rel.endpoint, p, op)
 
@@ -416,16 +457,18 @@ cdef class UniversalReciprocity (object):
                                (rel.reciprocity, i, rel.endpoint, rel.max_rank))
 
         if self.result_edges >= self.num_points - 1:
-            print ('Two subjects only')
+            self.logger.info('Two subjects only')
             return
         if warn > 0:
-            print (
-            'A lot of values(', warn, ') are the same. Try increasing max_neighbors_search(', self.max_neighbors_search,
+            self.logger.info(
+            'A lot of values('+str(warn)+') are the same. Try increasing max_neighbors_search('+str(self.max_neighbors_search)+
             ') parameter.')
 
         if infinitesimal > 0:
-            print ('Some distances(', infinitesimal, ') are smaller than self.PRECISION (', self.PRECISION,
+            self.logger.warning('Some distances('+str(infinitesimal)+') are smaller than self.PRECISION ('+str(self.PRECISION)+
                    ') level. Try decreasing double_precision parameter.')
+
+        self.logger.info(f'{self.result_edges:.0f} mutual edges {100.*self.result_edges/self.num_points:.2f}%')
 
         edge_cases = 0
 ############
@@ -443,9 +486,8 @@ cdef class UniversalReciprocity (object):
                 heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
 ###############
         if self.result_edges != self.num_points - 1:
-            print (str(
-                self.num_points - 1 - self.result_edges) + ' not connected edges of', self.num_points - 1,'. It is a forest. Try increasing max_neighbors(max_ranking) value ' + str(
-                self.max_neighbors_search) + ' for a better result.')
+            self.logger.info('%s not connected edges of %s. It is a forest. Try increasing max_neighbors(max_ranking) value %s for a better result.',
+                self.num_points - 1 - self.result_edges, self.num_points - 1, self.max_neighbors_search)
             if self.result_pairs_arr is not None:
                 self.result_pairs_arr[2 * self.result_edges] = -1
                 self.result_pairs_arr[2 * self.result_edges + 1] = -1
@@ -453,5 +495,5 @@ cdef class UniversalReciprocity (object):
 
         if self.max_neighbors_search < self.num_points - 1 and edge_cases != 0:
             # todo: may be check the actual reachability of indices?
-            print (str(edge_cases) + ' edges with the max rank. Try increasing max_neighbors(max_ranking) value '+ str(
-                self.max_neighbors_search) + 'or pick the square mode (not available).')
+            self.logger.info('%s edges with the max rank. Try increasing max_neighbors(max_ranking) value %s or pick the square mode (not available yet).',
+                edge_cases, self.max_neighbors_search)
