@@ -9,104 +9,102 @@
 DRUHG
 =====
 
-| DRUHG - Dialectical Reflection Universal Hierarchical Grouping (друг).
-| Performs clustering based on densities, catches global outliers and allows visual cluster hierarchy navigation.
-| **Does not require parameters.** *(The parameter is metric of space, e.x. euclidean)*
-| The user can filter the size of the clusters with ``size_range``, for genuine result/outliers set to [1,1].
-| Parameter ``fix_outliers`` allows to label outliers to their closest clusters via mstree edges.
+DRUHG — Dialectical Reflection Universal Hierarchical Grouping (друг).
+
+Density-based clustering that catches global outliers and lets you navigate the cluster hierarchy visually. It does not require clustering hyperparameters. The space metric (e.g. Euclidean) is the only real choice.
+
+Optional knobs:
+
+- ``size_range`` — filter cluster size; use ``[1, 1]`` for genuine outliers.
+- ``fix_outliers`` — assign outliers to their closest clusters along MST edges.
+- ``max_ranking`` — neighbor-search depth; trade speed for precision.
 
 -------------
 Basic Concept
 -------------
 
-| The algorithm works by applying **the universal society rule: treat others how you want to be treated**.
-| The A point checks surrondings of the point B and converts it in it's own point of view.
-| Each pair A,B produces **dialectical distance** max( r/R d(r); d(R) ), 
-| where r and R are amounts of points inside of balls from A to B and from B to A.
-| The closest distance wins and crystalizes into edge. Process repeats.
-|
+The algorithm applies **the universal society rule: treat others as you want to be treated**.
 
-| This orders outliers last and equal densities first. The best EDA *Exploratory Data Analysis*.
-| It's great **replacement for (H)DBSCAN** and **global outliers detection**.
-| The expensiveness O(n*n) of all points pairs evaluation is not needed, only low k-neighbors matters.
-| Therefore you can control productivity vs precision with ``max_ranking`` parameter, after some k the result converges.
-|
+Point A inspects the surroundings of point B and converts that view into its own. Each pair ``A, B`` produces a **dialectical distance** ``max( r/(R-∩) d(r); d(R) )``, where ``r`` and ``R`` are the numbers of points inside the balls from A to B and from B to A. The closest dialectical distance wins and crystallizes into an edge. The process repeats.
 
-| **The cluster**.
-| The formula behind clusters' coloring best explain through graphs and the nature of maths objects.
-| The points *are*, the edges *connects*, and **the dictionary of key-value pairs** point-to-edge "*colors*".
-| And when two graphs connects, then two sets of points can be linked to the connecting edge.
-| 1. Both graphs clusterize to same edge, for a future connections it will be one cluster.
-| 2. One graph clusterizes, its' points link to the connecting edge. E.g. regular cluster.
-| 3. No clusterisation. Everything aggregates. The connecting edge is not pointed by any point, and it doesn't have a color.
-|
+This orders outliers last and equal densities first. It is a strong EDA (exploratory data analysis) method, a replacement for (H)DBSCAN, and a global-outlier detector.
 
-| Each graph reflects in it's rival and solves mathematical inequality:
-| D N₂ L₁ sum₁ (nᵢ-1')/nᵢdᵢ > l₁(L₁+L₂), where D - dialectical distance of connecting edge;
-| N₂ - rival's points; L₁, L₂ - unique linked edges;
-| dᵢ - dialectical distance of the pointed edge (sum is iterated over unique pointed edges L₁, not their dd values);
-| nᵢ-1' - amount of edges of one color (usually edges = points - 1, except outliers they have 1edge and 1 point);
-| thus (nᵢ-1)/nᵢdᵢ when nᵢ>1 and 1/dᵢ when nᵢ=1;
-| l₁ - amount of "colored" edges, every edge of a linked subgraph is counted, edges from no clusterisation example are not.
-|
+Evaluating all ``O(n²)`` pairs is unnecessary; only a small number of nearest neighbors matters. Control speed vs precision with ``max_ranking`` — after some ``k`` the result converges.
 
-| Newly formed cluster resists reclusterisation with it's internal high dᵢ, high l₁ and low L₁.
-| Outliers bring 1 as N₂, contribute 1 to L₂ and they are easily countered with l₁.
-| External eventually huge D or N₂ or dillution of L₁ will clusterize anything.
-| This approach is drastically different from an usual overcome xyz coefficient.
+**The cluster.** The coloring formula is easiest to see through graphs and the nature of mathematical objects. Points *are*, edges *connect*, and **the dictionary of key–value pairs** (point-to-edge) "*colors*". When two graphs connect, the two sets of points can be linked to the connecting edge:
 
+1. Both graphs clusterize to the same edge; In case of mutual clusterisation it is seen as one cluster.
+2. One graph clusterizes; its points link to the connecting edge (a regular cluster).
+3. No clusterisation. Everything aggregates.
 
+Each graph reflects in its rival and solves the inequality:
+
+``D N₂ L₁ ∑₁ 1 / dᵢ > N₁ (L₁ + L₂)``
+
+where:
+
+- ``D`` — dialectical distance of the connecting edge
+- ``N₁``, ``N₂`` — own and rival sides of a graph
+- ``L₁``, ``L₂`` — unique linked edges
+- ``∑₁ 1 / dᵢ `` — sum of reciprocals of unique linked edges
+
+A newly formed cluster resists reclusterisation with its internal high ``dᵢ`` and low ``L₁``. Outliers bring ``1`` as ``N₂``, contribute ``1`` to ``L₂``. Eventually a huge external ``D``, ``N₂``, or dilution of ``L₁`` will clusterize anything.
+
+This is drastically different from the usual overcome-xyz coefficient.
 
 ----------------
 How to use DRUHG
 ----------------
-.. code:: python
-
-             import sklearn.datasets as datasets
-             import druhg
-
-             iris = datasets.load_iris()
-             XX = iris['data']
-
-             clusterer = druhg.DRUHG(max_ranking=50)
-             labels = clusterer.fit(XX).labels_
-
-It will build the tree and label the points. Now you can manipulate clusters by relabeling.
 
 .. code:: python
 
-             labels = dr.relabel(exclude=[7749, 100], size_range==[0.2, 2242], fix_outliers=1)
-             ari = adjusted_rand_score(iris['target'], labels)
-             print ('iris ari', ari)
+    import sklearn.datasets as datasets
+    from sklearn.metrics import adjusted_rand_score
+    import druhg
 
-Relabeling is cheap.
- - ``exclude`` breaks clusters by label number,
- - ``size_range`` restricts cluster size by percent or by absolute number,
- - ``fix_outliers`` colors outliers by connectivity.
+    iris = datasets.load_iris()
+    XX = iris['data']
 
-.. code:: python
+    clusterer = druhg.DRUHG(max_ranking=50)
+    labels = clusterer.fit(XX).labels_
 
-            clusterer.plot(labels)
-
-It will draw mstree with druhg-edges.
+This builds the tree and labels the points. You can then reshape clusters by relabeling:
 
 .. code:: python
 
-            clusterer.plot()
+    labels = clusterer.relabel(exclude=[7749, 100], size_range=[0.2, 2242], fix_outliers=True)
+    ari = adjusted_rand_score(iris['target'], labels)
+    print('iris ari', ari)
 
-It will provide interactive sliders for an exploration.
+Relabeling is cheap:
+
+- ``exclude`` — break clusters by label number
+- ``size_range`` — restrict cluster size by fraction (values ``< 1``) or by absolute count
+- ``fix_outliers`` — color outliers by connectivity
+
+Draw the MST with DRUHG edges:
+
+.. code:: python
+
+    clusterer.plot(labels)
+
+Or open interactive sliders for exploration:
+
+.. code:: python
+
+    clusterer.plot()
 
 .. image:: https://raw.githubusercontent.com/artamono1/druhg/master/docs/source/pics/chameleon-sliders.png
-    :width: 300px
-    :align: center
-    :height: 200px
-    :alt: chameleon-sliders
+   :width: 300px
+   :align: center
+   :height: 200px
+   :alt: chameleon-sliders
 
 -----------
 Performance
 -----------
-| It can be slow on a highly structural data.
-| There is a parameters ``max_ranking`` that can be used to decrease for a better performance.
+
+It can be slow on highly structured data. Lower ``max_ranking`` for better performance.
 
 .. image:: https://raw.githubusercontent.com/artamono1/druhg/master/docs/source/pics/comparison_ver.png
     :width: 300px
@@ -118,41 +116,50 @@ Performance
 Installing
 ----------
 
-PyPI install, presuming you have an up to date pip:
+PyPI install, assuming an up-to-date pip:
 
 .. code:: bash
 
     pip install druhg
 
-
 -----------------
 Running the Tests
 -----------------
 
-The package tests can be run after installation using the command:
+After installation:
 
 .. code:: bash
 
-    pytest -k "test_name"
+    pytest druhg/tests -k "test_name"
+
+The tests may fail.
+
+.. code:: bash
+
+    pytest druhg/tests -k "test_name" -v
+
+For a verbose logging
 
 
-The tests may fail :-D
+.. code:: bash
+
+    pytest druhg/tests -k "test_name" -log=DEBUG
+
+For a deep dive
 
 --------------
 Python Version
 --------------
 
-The druhg library supports Python 3.
-
+DRUHG supports Python 3.
 
 ------------
 Contributing
 ------------
 
-We welcome contributions in any form! Assistance with documentation, particularly expanding tutorials,
-is always welcome. To contribute please `fork the project <https://github.com/artamono1/druhg/issues#fork-destination-box>`_
-make your changes and submit a pull request. We will do our best to work through any issues with
-you and get your code merged into the main branch.
+Contributions in any form are welcome. Help with documentation, especially tutorials, is always useful. Fork the project, make your changes, and submit a pull request:
+
+https://github.com/artamono1/druhg
 
 ---------
 Licensing
