@@ -295,14 +295,11 @@ def druhg(X, max_ranking=16,
 
     Returns
     -------
-    labels : ndarray, shape (n_samples)
-        Cluster labels for each point. Noisy samples are given the label -1.
+    buffers : dict, enum (Buffer.__members__)
+        Buffer's dictionary with every result including intermediate. Labels(30) for each point where outliers labeled -1.
 
-    min_spanning_tree : ndarray, shape (2*n_samples - 2)
-        The minimum spanning tree as edgepairs.
-
-    values_edges : ndarray, shape (n_samples - 1)
-        Values of the edges.
+    num_edges : int
+        The amount of connected edges. The tree might be disconnected due to low `max_ranking` near-neighbors.
 
     References
     ----------

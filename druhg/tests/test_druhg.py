@@ -27,6 +27,9 @@ _plot_graph = 1
 _test_extra_visualisation = 1
 _not_fail_all = True
 
+def test_Buffer(filename=None):
+    print(Buffer.__members__)
+
 def test_minitest(filename=None):
     if filename is None:
         filename = test_minitest.__name__
