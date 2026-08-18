@@ -49,7 +49,7 @@ def requirements():
 
 configuration = {
     'name': 'druhg',
-    'version': '1.8.1',
+    'version': '1.8.2',
     'description': 'Universal clustering based on dialectical materialism',
     'long_description': readme(),
     'classifiers': [
@@ -77,7 +77,7 @@ configuration = {
     'ext_modules': [
                     _druhg_unionfind,
                     _druhg_tree,
-                    _druhg_group,                    
+                    _druhg_group,
                     _druhg_label,
                     _druhg_group_placement,
                     _druhg_displacement

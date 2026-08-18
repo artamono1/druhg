@@ -16,16 +16,14 @@
 
 import numpy as np
 cimport numpy as np
+import logging
 
 from ._druhg_unionfind import UnionFind
 from ._druhg_unionfind cimport UnionFind
 
 from ._druhg_group import Group
 from ._druhg_group cimport Group
-
-from ._druhg_group_placement import GroupPlacement
-from ._druhg_group_placement cimport GroupPlacement
-
+from ._druhg_group cimport GroupNode
 from ._druhg_group cimport set_precision
 
 def allocate_buffer_labels(np.intp_t size):
@@ -71,12 +69,7 @@ cdef class Clusterizer:
         self._data_arr = _data_arr if isinstance(_data_arr, np.ndarray) else None
         self._values_arr = _values_arr
 
-
         # TODO: check the allocations and the size
-        # if ret_labels is not None and len(ret_labels) < self._U.p_size:
-        #     print('ERROR: labels buffer is too small', len(ret_labels), self._U.p_size)
-        #     return
-
         self.group_arr = buf_group_arr
         self.ret_sizes = buf_ret_sizes
         self.ret_clusters = buf_ret_clusters
@@ -84,55 +77,52 @@ cdef class Clusterizer:
     cpdef emerge(self, precision=0.0000001, run_motion = False):
         if precision is not None and precision > 0:
             set_precision(precision)
-        
-        self.group_arr[:self._U.p_size].fill(0)
+
         self.ret_clusters[:self._U.p_size].fill(0)
         self.ret_sizes[:self._U.p_size].fill(0)
-        
-        if run_motion == False:
-            return self.emerge_still()
-        return self.emerge_placement()
+
+        return self.emerge_still()
 
     cdef emerge_still(self):
         cdef:
             np.intp_t p, u, i, j,
             x_size, y_size,
-            
-            loop_size1 = self._U.p_size, 
+
+            loop_size1 = self._U.p_size,
             loop_size2 = self._U.p_size * 2,
             offset = self._U.get_offset()
 
-            bint x_is_cluster, y_is_cluster
+            np.intp_t x_is_cluster, y_is_cluster
+            GroupNode x_node, y_node
 
             np.double_t v, limit = 0.
 
-        # helpers
-        x_group = Group(np.zeros_like(self.group_arr[:1])[0])
-        y_group = Group(np.zeros_like(self.group_arr[:1])[0])
-        p_group = Group(np.zeros_like(self.group_arr[:1])[0])
-        outlier_group = Group(np.zeros_like(self.group_arr[:1])[0])
-        outlier_group.cook_outlier(0)
+        data_dict = {}
+        outlier = GroupNode(0)  # stub, values are ignored
 
+        logger = logging.getLogger(__package__)
+
+        logger.info('Labeling: start')
         # first ever connection of every point
         for u in range(loop_size1):
             p = self._U.parent[u]
-            if p == 0:  # in case a point doesnt have any connection
+            if p == 0:  # point has no connection
                 continue
             assert p >= self._U.p_size
             p = p - offset
             assert 0 <= p <= self._U.p_size
             v = self._values_arr[p]
-            # r = self.ranks_arr[has_ranks * p]
 
             y_size = self.ret_sizes[p]
             self.ret_sizes[p] = y_size + 1
-            # p_group.assume_data(self.group_arr[p], y_size, self.ret_clusters[p])
-            j = Group.add_child_id_and_get_sibling(self.group_arr[p], u)
-            
-            if y_size!=0: # same as y_size == 1 
-                self.ret_clusters[p] = -1 # edges are negative until proven clusters
-                Group.form_mutual_closest_2p_cluster(self.group_arr[p], v)
 
+            logger.debug('%s %s %s', p, v, y_size!=0)
+
+            if y_size != 0:  # same as y_size == 1
+                self.ret_clusters[p] = 1
+                data_dict[p] = GroupNode(sum_reciprocals=1. / v if v != 0. else 0.)
+
+        logger.info('Labeling: %s nodes allocated', len(data_dict))
 
         # dealing with complex parents
         for u in range(loop_size1 + 1, loop_size2):
@@ -146,145 +136,48 @@ cdef class Clusterizer:
                 continue
             p = p - offset
             assert 0 <= p <= self._U.p_size
+            logger.debug('u %s %s',u, p)
 
             x_size = self.ret_sizes[i]
             y_size = self.ret_sizes[p]
             self.ret_sizes[p] = y_size + x_size
 
-            j = Group.add_child_id_and_get_sibling(self.group_arr[p], i)
-
-            if y_size == 0:  # first time passing, second time processing
+            logger.debug('%s y_size ', y_size)
+            if y_size == 0: # first time passing, second time processing
+                self.ret_clusters[p] = i # temp using future clustering place
                 continue
-            
 
             v = self._values_arr[p]
-            if v == 0:                              
-                self.ret_clusters[p] = -(x_size + y_size - 1)
-                Group.set_outliers(self.group_arr[p], x_size + y_size - 1)
-                continue
-
+            logger.debug('v %s', v)
+            
             # x_group cannot be an outlier by construction
-            x_group.assume_data(self.group_arr[i], x_size, self.ret_clusters[i])            
+            x_node = data_dict[i]
+            del data_dict[i]
+            x_is_cluster = self.ret_clusters[i]
 
-            if y_size==1: # y_is_outlier
-                y_group.assume_data(outlier_group.data, 1, 0)  # плохо сделано, надо отдельный метод
-                y_is_cluster = True
+            _y_is_cluster = 0  # outlier has no edges
+            y_is_cluster = -1  # outlier auto-clusterize
+            if y_size == 1:
+                y_node = outlier  # stub, values are ignored
             else:
-                y_group.assume_data(self.group_arr[j], y_size, self.ret_clusters[j])
-                y_is_cluster = y_group.will_cluster(v, x_group)
-                assert y_group._neg_uniq_edges <= 0
-                self.ret_clusters[j] = -y_group._neg_uniq_edges if y_is_cluster else y_group._neg_uniq_edges
+                j = self.ret_clusters[p]  # id, not a clusters
+                logger.debug('%s -data_dict j', j)
+                y_node = data_dict[j]
+                del data_dict[j]
+                _y_is_cluster = self.ret_clusters[j]
+                y_is_cluster = Group.will_cluster(y_size, _y_is_cluster, &y_node, v, x_size, x_is_cluster, &x_node)
+                self.ret_clusters[j] = y_is_cluster
 
-            x_is_cluster = x_group.will_cluster(v, y_group)
-            assert x_group._neg_uniq_edges <= 0
-            self.ret_clusters[i] = -x_group._neg_uniq_edges if x_is_cluster else x_group._neg_uniq_edges
+            x_is_cluster = Group.will_cluster(x_size, x_is_cluster, &x_node, v, y_size, _y_is_cluster, &y_node)
+            self.ret_clusters[i] = x_is_cluster
 
-            assert self.ret_clusters[p] == 0
-            self.ret_clusters[p] = Group.aggregate(self.group_arr[p], v, x_is_cluster, x_group, y_is_cluster, y_group)
+            self.ret_clusters[p] = Group.aggregate(x_size, x_is_cluster, &x_node, v, y_size, y_is_cluster, &y_node)
+            assert (self.ret_clusters[p] > 0)
+            data_dict[p] = x_node
+            logger.debug('%s +data_dict p', p)
 
-        return self.ret_clusters, self.ret_sizes, self.group_arr
-
-
-    cdef emerge_placement(self):
-        cdef:
-            np.intp_t p, u, i, j,
-            x_size, y_size,
-
-            loop_size1 = self._U.p_size, 
-            loop_size2 = self._U.p_size * 2,
-            offset = self._U.get_offset()
-
-            bint x_is_cluster, y_is_cluster
-
-            np.double_t v, limit = 0.
-
-        if self._data_arr is None:
-            print('ERROR: data values are missing')
-            return
-
-        # helpers
-        x_group = GroupPlacement(np.zeros_like(self.group_arr[:1])[0])
-        y_group = GroupPlacement(np.zeros_like(self.group_arr[:1])[0])
-        p_group = GroupPlacement(np.zeros_like(self.group_arr[:1])[0])
-        outlier_group = GroupPlacement(np.zeros_like(self.group_arr[:1])[0])
-        outlier_group.cook_outlier(0)
-
-        # first ever connection of every point
-        for u in range(loop_size1):
-            p = self._U.parent[u]
-            if p == 0:  # in case a point doesnt have any connection
-                continue
-            assert p >= self._U.p_size
-            p = p - offset
-            assert 0 <= p <= self._U.p_size
-            v = self._values_arr[p]
-            # r = self.ranks_arr[has_ranks * p]
-
-            y_size = self.ret_sizes[p]
-            self.ret_sizes[p] = y_size + 1
-
-            # p_group.assume_data(self.group_arr[p], y_size, self.ret_clusters[p])
-            j = Group.add_child_id_and_get_sibling(self.group_arr[p], u)
-            
-            if y_size!=0: # same as y_size == 1 
-                self.ret_clusters[p] = -1 # edges are negative until proven clusters
-                Group.form_mutual_closest_2p_cluster(self.group_arr[p], v)
-                GroupPlacement.form_coords_mutual_closest_2p_cluster(self.group_arr[p], v, self._data_arr[u], self._data_arr[j])
-
-
-        # dealing with complex parents
-        for u in range(loop_size1 + 1, loop_size2):
-            i = u - offset
-            assert 0 <= i <= self._U.p_size
-
-            p = self._U.parent[u]
-            if p == 0:
-                if self.ret_sizes[i] == 0:
-                    break
-                continue
-            p = p - offset
-            assert 0 <= p <= self._U.p_size
-
-            x_size = self.ret_sizes[i]
-            y_size = self.ret_sizes[p]
-            self.ret_sizes[p] = y_size + x_size
-            
-            j = Group.add_child_id_and_get_sibling(self.group_arr[p], i)
-            
-            if y_size == 0:  # first time passing, second time processing
-                continue
-
-            v = self._values_arr[p]
-            if v == 0:                              
-                self.ret_clusters[p] = -(y_size + x_size - 1)
-                Group.set_outliers(self.group_arr[p], y_size + x_size - 1)
-                #todo: add motion analog
-                continue
-
-            # x_group cannot be an outlier by construction
-            x_group.assume_data(self.group_arr[i], x_size, self.ret_clusters[i])            
-
-            if y_size==1: # y_is_outlier
-                y_group.assume_data(outlier_group.data, 1, 0)  # плохо сделано, надо отдельный метод
-                y_is_cluster = True
-                y_group.cook_outlier_coords(self._data_arr[j])
-            else:
-                y_group.assume_data(self.group_arr[j], y_size, self.ret_clusters[j])
-                y_is_cluster = y_group.will_cluster(v, x_group)
-                assert y_group._neg_uniq_edges <= 0
-                self.ret_clusters[j] = -y_group._neg_uniq_edges if y_is_cluster else y_group._neg_uniq_edges
-
-            x_is_cluster = x_group.will_cluster(v, y_group)
-            assert x_group._neg_uniq_edges <= 0
-            self.ret_clusters[i] = -x_group._neg_uniq_edges if x_is_cluster else x_group._neg_uniq_edges
-
-            assert self.ret_clusters[p] == 0
-            self.ret_clusters[p] = Group.aggregate(self.group_arr[p], v, x_is_cluster, x_group, y_is_cluster, y_group)
-
-            GroupPlacement.aggregate_coords(self.group_arr[p], v, x_is_cluster, x_group, y_is_cluster, y_group)
-            # print('run_motion', p_group.data)
-
-        return self.ret_clusters, self.ret_sizes, self.group_arr
+        del outlier
+        return self.ret_clusters, self.ret_sizes, None
 
     cdef void _fixem(self, np.ndarray edges_arr, np.intp_t num_edges, np.ndarray result):
         cdef:
@@ -340,7 +233,7 @@ cdef class Clusterizer:
                 cluster_size = self.ret_sizes[pp]
                 if cluster_size > limitH:
                     break
-                if self.ret_clusters[pp] > 0 and cluster_size >= limitL and pp not in exclude:
+                if self.ret_clusters[pp] < 0 and cluster_size >= limitL and pp not in exclude:
                     label = pp
                 p = self._U.parent[p]
             ret_labels[i] = label
@@ -351,60 +244,62 @@ cdef class Clusterizer:
                                 np.intp_t fix_outliers=0, edgepairs_arr=None,
                                 precision=0.0000001):
         """Returns cluster labels and clusters densities.
-    
+
         Marks data-points with corresponding parent index of a cluster.
         Exclude list breaks passed clusters by their parent index.
         `size_range` breaks clusters outside it's range.
         Outliers-noise marked by -1.
-    
+
         Parameters
         ----------
-    
+
         ret_labels : ndarray
-            The result. -1 are outliers.    
-    
+            The result. -1 are outliers.
+
         exclude : list
-            Clusters with parent-index from this list will not be formed. 
-    
+            Clusters with parent-index from this list will not be formed.
+
         size_range : list, optional (default=[1,size])
-            Clusters that are smaller or over than the range treated as noise. 
+            Clusters that are smaller or over than the range treated as noise.
             Pass None to find True outliers.
-    
+
         fix_outliers: bool, optional (default=False)
             All outliers will be assigned to the nearest cluster. Need to pass mst(edgepairs).
-    
+
         edgepairs_arr: array, optional (default=None)+
             Used with fix_outliers.
-            
+
         precision: double, optional
             Relevant for small distances
-    
+
         Returns
         -------
-    
+
         labels : array [size]
            An array of cluster labels, one per data-point. Unclustered points get
            the label -1.
-    
+
         metalabels : dictionary, on-demand
-            A dictionary: keys - labels, values - tuples (distance, rank).   
-    
+            A dictionary: keys - labels, values - tuples (distance, rank).
+
         """
         cdef:
             int i
+
+        logger = logging.getLogger(__package__)
 
         if size_range is None:
             limitL, limitH = 0, 0
         else:
             limitL, limitH = size_range[0], size_range[1]
         if limitL < 0 or limitL > self._U.p_size:
-            print ('label: size_range[0] is ignored. Cannot use '+str(limitL))
+            logger.info('label: size_range[0] is ignored. Cannot use '+str(limitL))
             limitL = 0
         if limitL < 1:
             limitL = int(limitL * self._U.p_size)
 
         if limitH <= 0 or limitH > self._U.p_size + 1:
-            print ('label: size_range[1] is ignored. Cannot use ' + str(limitH))
+            logger.info('label: size_range[1] is ignored. Cannot use ' + str(limitH))
             limitH = self._U.p_size
         if limitH <= 1:
             limitH = int(limitH * self._U.p_size + 1)
@@ -413,7 +308,7 @@ cdef class Clusterizer:
             exclude = []
 
         if ret_labels is not None and len(ret_labels) < self._U.p_size:
-            print('ERROR: labels buffer is too small', len(ret_labels), self._U.p_size)
+            logger.info('ERROR: labels buffer is too small '+str(len(ret_labels))+' '+str(self._U.p_size))
             return
 
         ret_labels = self._mark_labels(ret_labels,
@@ -423,13 +318,13 @@ cdef class Clusterizer:
             if edgepairs_arr is not None:
                 self._fixem(edgepairs_arr, self._U.p_size - 1, ret_labels)
             else:
-                print('To fix_outliers pass edgepairs', edgepairs_arr)
+                logger.warning('To fix_outliers pass edgepairs '+str(edgepairs_arr))
 
         return ret_labels
 
 
 cdef np.ndarray pretty(np.ndarray labels_arr):
-    """ Relabels to pretty positive integers. 
+    """ Relabels to pretty positive integers.
     """
     cdef np.intp_t i, p, label, max_label
     cdef np.ndarray[np.intp_t, ndim=1] result_arr

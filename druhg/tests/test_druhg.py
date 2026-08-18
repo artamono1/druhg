@@ -2,219 +2,42 @@
 Tests for DRUHG clustering algorithm
 """
 # pytest -k "test_name"
-import pickle
 import numpy as np
 import pandas as pd
 from scipy.spatial import distance
 from scipy import sparse
-from scipy import stats
-import pytest  #delete __init__.py or it wont work
+import pytest  # delete __init__.py or it wont work
 import time
 
+from druhg import DRUHG, druhg, Buffer
 
-from druhg import (DRUHG,
-                   druhg)
-
+import matplotlib
+matplotlib.use('Qt5Agg')
 from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 
-# from sklearn.cluster.tests.common import generate_clustered_data
 import sklearn.datasets as datasets
-from sklearn.datasets import make_blobs
-from sklearn.utils import shuffle
-from sklearn.preprocessing import StandardScaler
-from scipy.stats import mode
 from sklearn.metrics import adjusted_rand_score
-
-from tempfile import mkdtemp
-from functools import wraps
-
-import warnings
 
 moons, _ = datasets.make_moons(n_samples=50, noise=0.05)
 blobs, _ = datasets.make_blobs(n_samples=50, centers=[(-0.75, 2.25), (1.0, 2.0)], cluster_std=0.25)
-X = np.vstack([moons, blobs])
+# X = np.vstack([moons, blobs])
 
-_plot_graph = 0
-_test_extra_visualisation = 0
+_plot_graph = 1
+_test_extra_visualisation = 1
 _not_fail_all = True
+
+def test_Buffer(filename=None):
+    print(Buffer.__members__)
 
 def test_minitest(filename=None):
     if filename is None:
         filename = test_minitest.__name__
-    XX = np.array([[ 9.82287700e-01, -4.91767541e-01],
-       [ 7.79582720e-01,  6.08296786e-01],
-       [-8.88193604e-01,  4.43296052e-01],
-       [ 7.78691236e-02,  1.05579835e-01],
-       [ 7.05833295e-01, -4.49687952e-01],
-       [ 9.08054027e-01,  3.82957634e-01],
-       [-8.44357575e-01,  4.76983140e-01],
-       [-6.96863884e-01,  7.50031808e-01],
-       [ 4.39031497e-01,  8.96900018e-01],
-       [ 2.06198639e+00,  4.95933426e-01],
-       [ 2.00697002e+00,  2.51940542e-01],
-       [ 8.86671509e-01,  5.33899191e-01],
-       [ 1.01472887e+00,  1.77887023e-01],
-       [-9.99361908e-01,  8.14805761e-02],
-       [ 1.66364569e+00, -2.72722628e-01],
-       [ 1.45444706e-01, -3.60310809e-04],
-       [ 2.47847446e-02,  2.47518860e-01],
-       [ 5.33608226e-01, -4.16318654e-01],
-       [-1.02367914e+00,  2.03681301e-01],
-       [ 1.72252995e+00, -1.73532360e-01],
-       [ 1.19371766e-01,  9.66962174e-01],
-       [-9.96385260e-01,  1.51193473e-03],
-       [ 1.97170679e+00,  1.10284595e-01],
-       [-4.04580401e-03,  3.53573375e-01],
-       [ 6.27338990e-01, -4.64420966e-01],
-       [ 1.71681386e-01, -1.17028174e-01],
-       [ 1.26919122e+00, -4.46221578e-01],
-       [ 6.14585010e-02,  1.00584911e+00],
-       [ 1.09577989e+00, -5.01458976e-01],
-       [ 3.96411149e-01, -2.98249260e-01],
-       [ 1.88598729e+00,  7.33595903e-03],
-       [ 1.96974012e+00,  3.38327527e-01],
-       [-5.08398106e-01,  8.60840352e-01],
-       [-4.00736795e-01,  8.89316463e-01],
-       [ 1.77070595e+00, -1.36976988e-01],
-       [ 1.49886531e+00, -3.96515486e-01],
-       [ 7.22042880e-01,  7.04074310e-01],
-       [ 8.49944965e-01, -5.34124448e-01],
-       [-9.09817816e-02,  1.03513561e+00],
-       [ 5.14565924e-01,  7.87485818e-01],
-       [ 4.02652800e-01,  9.37234351e-01],
-       [-2.91295702e-01,  9.02204623e-01],
-       [ 2.87744167e-01, -2.31116381e-01],
-       [-3.31091977e-02,  4.88892172e-01],
-       [ 2.41871950e-01,  9.92840358e-01],
-       [ 1.06415165e+00, -1.65735096e-02],
-       [ 1.37323752e+00, -4.65626874e-01],
-       [-6.29552626e-01,  7.87828922e-01],
-       [-8.27252851e-01,  5.81983413e-01],
-       [ 1.00280073e+00,  2.68063630e-01],
-       [-7.83496058e-01,  2.18322479e+00],
-       [-9.92609950e-01,  2.02124136e+00],
-       [-9.81354504e-01,  2.29182851e+00],
-       [-4.98266423e-01,  1.78721081e+00],
-       [-1.08969024e+00,  2.32889766e+00],
-       [-1.08081235e+00,  1.98253144e+00],
-       [-1.09687394e+00,  1.95677593e+00],
-       [-1.00962708e+00,  1.98160320e+00],
-       [-5.23444712e-01,  2.05973030e+00],
-       [-5.27378118e-01,  2.01577480e+00],
-       [-1.01076274e+00,  2.26189991e+00],
-       [-1.07307453e+00,  1.59463042e+00],
-       [-3.71408468e-02,  2.36246794e+00],
-       [-4.78906511e-01,  2.09108831e+00],
-       [-1.36496960e+00,  1.75639407e+00],
-       [-9.63722898e-01,  1.77177389e+00],
-       [-8.57835037e-01,  2.85261536e+00],
-       [-9.01706144e-01,  1.96899908e+00],
-       [-7.83591885e-01,  1.97077401e+00],
-       [-7.53906201e-01,  2.01930595e+00],
-       [-1.06416195e+00,  2.09696002e+00],
-       [-1.06425933e+00,  1.92864353e+00],
-       [-5.59921254e-01,  1.92873234e+00],
-       [-2.93844091e-01,  2.13445936e+00],
-       [-1.08927720e+00,  2.22384623e+00],
-       [-5.47674986e-01,  2.56744321e+00],
-       [-8.32079069e-01,  1.91501237e+00],
-       [-8.64079731e-01,  2.02405299e+00],
-       [-9.43370303e-02,  1.53264890e+00],
-       [-8.46705805e-01,  2.08845880e+00],
-       [-7.64153884e-01,  1.95806975e+00],
-       [-7.97244563e-01,  1.93409856e+00],
-       [-6.11964372e-01,  1.83346591e+00],
-       [-7.97508190e-01,  2.18510057e+00],
-       [-5.06448969e-01,  1.99409096e+00],
-       [-6.53243323e-01,  2.52892190e+00],
-       [-8.73821576e-01,  1.80817140e+00],
-       [-7.03121501e-01,  1.95331014e+00],
-       [-9.83658309e-01,  2.33860746e+00],
-       [-1.01683507e+00,  1.94204773e+00],
-       [-4.87343036e-01,  1.56494127e+00],
-       [-7.79832602e-01,  2.07966975e+00],
-       [-4.46877995e-01,  1.45948349e+00],
-       [-3.51769879e-01,  1.59343158e+00],
-       [-1.34234725e+00,  2.31765803e+00],
-       [-9.56682748e-01,  1.53054479e+00],
-       [-6.10630098e-01,  1.87378092e+00],
-       [-7.42290479e-01,  1.84433031e+00],
-       [-8.39334432e-01,  1.81906771e+00],
-       [-9.27731599e-01,  2.29639091e+00],
-       [ 1.42071742e+00,  3.30486324e+00],
-       [ 1.55862485e+00,  1.30863477e+00],
-       [ 1.24972581e+00,  2.42336599e+00],
-       [ 5.33685073e-01,  2.59954396e+00],
-       [ 7.68000568e-01,  2.08111755e+00],
-       [ 2.35295779e+00,  3.68309710e+00],
-       [ 1.54597101e+00,  1.84281151e+00],
-       [ 8.12131013e-01,  3.29007476e+00],
-       [ 7.94516457e-01,  2.41783502e+00],
-       [ 7.98220091e-01,  9.82325962e-01],
-       [ 4.41618515e-01,  2.86576268e+00],
-       [ 2.28132907e+00,  2.62941621e+00],
-       [ 1.30744465e+00,  9.21494187e-01],
-       [ 2.89402898e+00,  3.07162590e+00],
-       [ 2.59828872e+00,  3.48249198e+00],
-       [ 2.39156834e-01,  1.13332844e+00],
-       [ 1.28134650e+00,  1.69771109e+00],
-       [ 2.47539905e+00,  3.84649616e+00],
-       [ 8.47050787e-01,  2.07370998e+00],
-       [ 1.70839331e+00,  2.03061588e+00],
-       [ 1.86776491e+00,  2.64855805e+00],
-       [ 1.82506092e+00,  2.65118340e+00],
-       [ 7.38734334e-01,  2.46762804e+00],
-       [ 2.05216302e+00,  3.09939872e-01],
-       [ 2.08265157e+00,  2.68029197e+00],
-       [ 5.48953797e-01,  1.63082304e+00],
-       [ 6.66897628e-01,  2.19248368e+00],
-       [ 7.21620016e-02,  1.92199689e+00],
-       [ 9.35013031e-01,  1.14139910e+00],
-       [ 2.10701578e+00,  1.56207334e+00],
-       [ 1.32685731e+00,  3.02292533e+00],
-       [-3.12399518e-01,  4.03870510e+00],
-       [ 2.45342595e+00,  3.36391798e+00],
-       [ 7.40975862e-01,  1.28206197e+00],
-       [ 7.23212885e-01,  1.25423311e+00],
-       [ 3.20586402e+00,  2.00176070e+00],
-       [ 5.44831804e-01,  8.42644367e-01],
-       [ 4.91531506e-01,  8.54574838e-01],
-       [ 1.09246967e+00,  2.28977328e+00],
-       [ 1.34148473e+00,  3.59316431e+00],
-       [ 1.47390241e+00,  2.68453871e+00],
-       [ 2.04938161e+00,  3.00980325e-01],
-       [ 4.74061748e-01,  1.82517865e+00],
-       [ 1.38255750e+00,  1.49441056e+00],
-       [-1.81396229e-01,  1.67608102e+00],
-       [ 1.61734753e+00,  1.62344100e+00],
-       [ 2.27547713e+00,  3.02798895e+00],
-       [ 1.26536052e+00,  2.74417246e+00],
-       [ 2.22312311e+00,  1.59609013e+00],
-       [ 7.16857960e-01,  1.30979190e+00],
-       [ 1.69435113e+00,  2.58428292e+00],
-       [ 2.56004668e+00,  1.90043678e+00],
-       [ 4.00593052e-01,  2.07202927e+00],
-       [ 1.09514002e+00,  8.32401990e-01],
-       [ 3.44335366e-01,  2.12210586e+00],
-       [ 1.66737772e+00,  2.58321428e+00],
-       [ 6.30088239e-01,  3.34926791e+00],
-       [ 1.71452800e+00,  4.05206484e+00],
-       [ 1.56123347e+00,  2.73666162e+00],
-       [ 2.25416915e+00,  3.33381046e+00],
-       [ 1.92722848e+00,  2.84539606e+00],
-       [ 1.94938390e+00,  2.02922499e+00],
-       [ 1.33211707e+00,  7.77595470e-01],
-       [ 1.44282596e+00,  3.03895516e+00],
-       [ 2.53818450e+00,  2.09297521e+00],
-       [ 7.06781846e-01,  2.88379784e+00],
-       [ 8.75255708e-01,  2.19440080e+00],
-       [ 1.03602323e+00,  1.95794841e+00],
-       [ 2.05569358e+00,  2.81113483e+00],
-       [ 1.29284658e+00,  3.66966168e+00]])
+    XX = pd.read_csv('druhg/tests/mini.csv', sep=',', header=None)#.drop(2, axis=1)
+    XX = np.array(XX)
     dr = DRUHG(max_ranking=50, verbose=False,
-               do_edges=True, size_range=[1, 1])
-               # do_edges=True, limitL=25, limitH=0.3, fix_outliers=1)
+            #    do_edges=True, size_range=[1, 1])
+               do_edges=True, limitL=25, limitH=0.3, fix_outliers=1)
 
     dr.fit(XX)
     if _plot_graph:
@@ -223,11 +46,11 @@ def test_minitest(filename=None):
         plt.savefig(filename+'1'+'.png')
         # dr.plot()
 
-    # if _plot_graph and _test_extra_visualisation:
-    #     plt.close('all')
-    #     dr.single_linkage_.plot(dr.labels_)
-    #
-    #     plt.savefig(filename +'plot'+ '.png')
+    if _plot_graph and _test_extra_visualisation:
+        plt.close('all')
+        dr.single_linkage_.plot(dr.labels_)
+
+        plt.savefig(filename +'plot'+ '.png')
     assert _not_fail_all
 
 def test_plotcluster(filename=None):
@@ -292,9 +115,10 @@ def test_plot_dendrogram(filename=None):
     XX = iris['data']
     dr = DRUHG(max_ranking=50, limitH=int(len(XX)/2), fix_outliers=1)  #, limitL=0, limitH=int(len(XX)/2), fix_outliers=1)
     dr.fit(XX)
+    dr.hierarchy()
     if _plot_graph:
         plt.close('all')
-        dr.single_linkage_.plot(dr.labels_)
+        dr.hierarchy()
         plt.savefig(filename+'.png')
     assert _not_fail_all
 
@@ -338,8 +162,10 @@ def test_2and3():
 def test_flatrangle_scaled(filename=None):
     if filename is None:
         filename = test_flatrangle_scaled.__name__
-    for i in range(-5, 4):
+    for i in range(0, 4):
+        print('=====line size', i)
         test_line(size=3, scale=10 ** i, filename=filename, all_clusters=True)
+        assert False
     assert _not_fail_all
 
 def test_rightangle(scale = 1., filename = None, all_clusters = True):
@@ -481,9 +307,9 @@ def test_linelong(filename=None):
 #     assert (n_clusters == 5)
 #     assert (0==1)
 
-def test_square(showplot=True, size=10, scale=5., filename=None):
+def test_squarex(showplot=True, size=10, scale=5., filename=None):
     if filename is None:
-        filename = test_square.__name__
+        filename = test_squarex.__name__
     XX = []
     for i in range(0, size):
         for j in range(0, size):
@@ -498,7 +324,7 @@ def test_square(showplot=True, size=10, scale=5., filename=None):
 
     if showplot and _plot_graph:
         plt.close('all')
-        print('dr.labels_', dr.labels_)
+        # print('dr.labels_', dr.labels_)
         dr.plot(dr.labels_)
         # dr.plot(dr.labels_)
         plt.savefig(filename + 'plot' + '.png')
@@ -508,16 +334,16 @@ def test_square(showplot=True, size=10, scale=5., filename=None):
     # print(dr.mst_[s-1], dr.mst_[s-2], XX[dr.mst_[s-1]], XX[dr.mst_[s-2]])
     labels = dr.labels_
     n_clusters = len(set(labels)) - int(-1 in labels)
-    print('n_clusters', n_clusters)
-    print(dr.mst_)
+    # print('n_clusters', n_clusters)
+    # print(dr.mst_)
     # print(XX)
-    print(dr.labels_)
+    # print(dr.labels_)
     # assert (n_clusters==1)
     # labels = dr.relabel(limitL=1, limitH=size*2)
     n_clusters = len(set(labels)) - int(-1 in labels)
     # print('n_clusters', n_clusters)
     # print('pairs', dr.mst_)
-    print('labels', dr.labels_)
+    # print('labels', dr.labels_)
 
     un, cn = np.unique(labels, return_counts=True)
     for i in range(0, len(un)):
@@ -532,9 +358,6 @@ def test_square(showplot=True, size=10, scale=5., filename=None):
     print('uniques', un, cn)
 
     sorteds = np.argsort(cn)
-    print('hello')
-    print('hello2', un[sorteds[0]], un[sorteds[1]])
-    # assert (False)
     dr.relabel(limitL=1, limitH=size*2)
     if showplot and _plot_graph:
         plt.close('all')
@@ -552,7 +375,7 @@ def test_square_scaled(filename=None):
         filename = test_square_scaled.__name__
     for i in range(-4, 4):
         # test_square(scale=10 ** i, filename=filename + "i" + str(i) + "-")
-        test_square(scale=10 ** i, filename=filename)
+        test_squarex(scale=10 ** i, filename=filename)
     assert _not_fail_all
 
 def test_squares_two(filename=None):
@@ -859,22 +682,22 @@ def test_druhg_sparse():
 def test_druhg_distance_matrix(filename=None):
     if filename is None:
         filename = test_druhg_distance_matrix.__name__
-    D = distance.squareform(distance.pdist(X))
+    D = distance.squareform(distance.pdist(np.vstack([moons, blobs])))
     D /= np.max(D)
 
     print(D.shape)
     dr = druhg(D, metric='precomputed')
-    print(dr)
-    n_clusters = len(set(dr[0])) - int(-1 in dr[0])
+    clusters = dr[0][Buffer.LABELS.value]
+    n_clusters = len(set(clusters)) - int(-1 in clusters)
     print(n_clusters)
     if _plot_graph:
         plt.close('all')
-        dr = DRUHG(metric="precomputed").fit(D)
+        dr = DRUHG(metric="precomputed", size_range=[0.,1.]).fit(D)
         dr.plot(dr.labels_)
         plt.savefig(filename+'1'+'.png')
     assert(n_clusters==4)
 
-    dr = DRUHG(metric="precomputed", limitL=5).fit(D)
+    dr = DRUHG(metric="precomputed", limitH=0.3).fit(D)
     labels = dr.labels_
     print(labels)
     n_clusters = len(set(labels)) - int(-1 in labels)
@@ -935,7 +758,7 @@ def test_hdbscan_clusterable_data(filename=None):
     if filename is None:
         filename = test_hdbscan_clusterable_data.__name__
     XX = np.load('druhg/tests/clusterable_data.npy')
-    dr = DRUHG(max_ranking=1000, verbose=False)
+    dr = DRUHG(max_ranking=1000, size_range=[0.05,0.25], verbose=False)
     dr.fit(XX)
     labels = dr.labels_
     uniques, counts = np.unique(labels, True)
@@ -986,16 +809,17 @@ def test_synthetic_outliers(filename=None):
         dr.plot(dr.labels_)
         plt.savefig(filename+'.png')
 
-    # values, counts = np.unique(dr.labels_, return_counts=True)
-    # for i, v in enumerate(values):
-    #     print(v, counts[i])
+    values, counts = np.unique(dr.labels_, return_counts=True)
 
     labels = dr.labels_
     # labels = dr.relabel(limitL=1)
     n_clusters = len(set(labels)) - int(-1 in labels)
-    print(labels)
-    print('n_clusters', n_clusters)
-    assert (n_clusters==6)
+    perc_outs = counts[np.where(values == -1)][0]/len(labels)
+    print(n_clusters, counts[np.where(values == -1)][0], perc_outs)
+
+    print('n_clusters %s %s outliers' % (n_clusters, perc_outs))
+    assert (n_clusters==2)
+    assert (perc_outs>=0.05)
     assert _not_fail_all
 
 
@@ -1064,8 +888,11 @@ def test_compound_egg(filename=None):
     # labels = dr.labels_
     n_clusters2 = len(set(labels)) - int(-1 in labels)
     print( n_clusters2, set(labels))
-
     assert (n_clusters==2)
+
+    uniq = np.unique(labels, return_counts=True)[1]
+    uniq = sorted(uniq)
+    assert(uniq[0]==16 and uniq[1]==158)
     assert _not_fail_all
 
 def test_copycat():
@@ -1097,6 +924,7 @@ def test_copycats(): # should fail until weights are made
     n_clusters = len(set(labels)) - int(-1 in labels)
     assert (n_clusters==2)
     assert _not_fail_all
+    assert False
 
 
 def test_copycats2():
@@ -1117,8 +945,8 @@ def test_copycats2():
     assert _not_fail_all
 
 
-def test_copycats3(): # should fail until weights are made
-    XX = np.concatenate( ([[0]]*100, [[1]]*100, [[2]]*5) )
+def test_copycats3():
+    XX = np.concatenate( ([[0]]*100, [[1]]*100, [[3]]*5, [[4]]*5) )
     dr = DRUHG(max_ranking=10, limitL=1, limitH=250, verbose=False, do_edges=True)
     dr.fit(XX)
     print(dr.mst_[0], dr.mst_[1])
@@ -1191,7 +1019,7 @@ def test_copycats3(): # should fail until weights are made
 
 
 
-def test_triangle(scale = 1., height1 = 0.45, height2 = 0.5, dis=0,  filename = None, three_clusters = True):
+def test_triangle(scale=1., height1=0.45, height2=0.5, dis=0, filename=None, three_clusters=True):
     if filename is None:
         filename = test_triangle.__name__
     XX = [[scale*height1, 0.], [scale*height2, 0], [0, scale*dis]]
@@ -1319,7 +1147,7 @@ def test_chameleon(filename=None):
 
     if _plot_graph and _test_extra_visualisation:
         plt.close('all')
-        dr.single_linkage_.plot(dr.labels_)
+        dr.hierarchy()
         plt.savefig(filename +'plot'+ '.png')
 
     exc = dr.labels_[3024]
@@ -1337,7 +1165,7 @@ def test_chameleon(filename=None):
         plt.savefig(filename+'4'+'.png')
 
     assert (n_clusters2==6)
-    assert (n_clusters==6)
+    assert (n_clusters==3)
     assert _not_fail_all
 
 
@@ -1362,7 +1190,7 @@ def test_cham_amt(filename=None):
         filename = test_cham_amt.__name__
     XX = pd.read_csv('druhg/tests/chameleon.csv', sep='\t', header=None)
     XX = np.array(XX)
-    dr = DRUHG(max_ranking=4200, limitL=1, limitH=0.25, verbose=False, algorithm='slow')
+    dr = DRUHG(max_ranking=100, limitL=1, limitH=0.25, verbose=False, algorithm='slow')
     dr.fit(XX)
     if _plot_graph:
         plt.close('all')
@@ -1397,4 +1225,3 @@ def test_zero_distances(filename=None):
     assert (n_clusters == 4)
     assert (np.count_nonzero(labels == -1) == 5)
     assert _not_fail_all
-

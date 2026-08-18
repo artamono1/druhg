@@ -24,7 +24,7 @@ cdef class UnionFind:
 
         np.intp_t next_label
 
-    cdef: 
+    cdef:
         np.intp_t get_offset(self)
         np.intp_t nullify(self)
 

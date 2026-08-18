@@ -9,6 +9,8 @@
 # Author: Pavel Artamonov
 # License: 3-clause BSD
 
+import logging
+
 import numpy as np
 cimport numpy as np
 
@@ -21,7 +23,7 @@ cdef class UnionFind:
 
     def __init__(self, np.intp_t N, buffer_parents, buffer_fast=None):
         self.p_size = N
-        self.next_label = N + 1 
+        self.next_label = N + 1
 
         self.parent_arr = buffer_parents
         self.parent = NULL
@@ -30,10 +32,10 @@ cdef class UnionFind:
         # self.fast = NULL
 
         if buffer_parents is None:
-            print('ERROR: buffer was not provided')
+            logging.getLogger(__package__).error('buffer was not provided')
             return
         elif len(self.parent_arr) < 2*N:
-            print('ERROR: parent_arr is too small', len(self.parent_arr), 2*N)
+            logging.getLogger(__package__).error('parent_arr is too small %s %s', len(self.parent_arr), 2*N)
             return
         else:
             self.parent = (<np.intp_t *> self.parent_arr.data)
@@ -41,7 +43,7 @@ cdef class UnionFind:
         if buffer_fast is None:
             return
         elif len(self.fast_arr) < N:
-            print('ERROR: fast_arr is too small', len(self.fast_arr), N)
+            logging.getLogger(__package__).error('fast_arr is too small %s %s', len(self.fast_arr), N)
             return
         else:
             # self.fast = (<np.intp_t *> self.fast_arr.data)
@@ -54,7 +56,7 @@ cdef class UnionFind:
         cdef np.intp_t i
 
         self.parent_arr[:2 * self.p_size] = 0
-        i = self.p_size 
+        i = self.p_size
         while i!=0:
             i -= 1
             self.fast[i] = i
@@ -80,7 +82,7 @@ cdef class UnionFind:
 
     cdef np.intp_t union(self, np.intp_t n, np.intp_t on, np.intp_t p, np.intp_t op):
         cdef np.intp_t pp
-        
+
         pp = self.next_label
         self.fast[n] = self.fast[on] = pp
         self.parent[p] = self.parent[op] = pp
