@@ -390,6 +390,193 @@ def druhg(X, max_ranking=16,
     return buffers, num_edges
 
 
+def _scipy_id(node, n):
+    """Map a DRUHG union-find node to a SciPy linkage index.
+
+    Leaves ``0 .. n-1`` are unchanged. DRUHG skips label ``n``
+    (``next_label`` starts at ``n + 1``), so internal node ``n + 1 + k``
+    becomes SciPy cluster ``n + k``.
+    """
+    return node if node < n else node - 1
+
+
+def unionfind_to_linkage(parent, n, values, num_edges):
+    """Convert a DRUHG union-find tree to a SciPy linkage matrix.
+
+    Parameters
+    ----------
+    parent : array, shape (2 * n,)
+        Union-find parent buffer. Leaves are ``0 .. n-1``; created clusters
+        are ``n + 1, n + 2, ...``. Parent ``0`` means a root (or unused).
+
+    n : int
+        Number of samples.
+
+    values : array, shape (n - 1,)
+        Dialectical distance of each merge, in merge order.
+
+    num_edges : int
+        Number of real merges. May be ``< n - 1`` when the tree is a forest.
+
+    Returns
+    -------
+    Z : ndarray, shape (n - 1, 4)
+        SciPy linkage matrix. Each row is ``[idx1, idx2, dist, sample_count]``.
+        Remaining forest components are joined with distances slightly above
+        the last real merge so the matrix is a complete binary tree.
+    """
+    parent = np.asarray(parent)
+    values = np.asarray(values, dtype=np.float64)
+    offset = n + 1
+    n_merges = n - 1
+    if n < 2:
+        return np.empty((0, 4), dtype=np.float64)
+    if num_edges < 0:
+        num_edges = 0
+    if num_edges > n_merges:
+        num_edges = n_merges
+
+    children = np.full((n_merges, 2), -1, dtype=np.intp)
+    filled = np.zeros(n_merges, dtype=np.intp)
+
+    def add_child(node, p):
+        if p == 0:
+            return
+        i = int(p) - offset
+        if i < 0 or i >= num_edges:
+            return
+        slot = filled[i]
+        if slot >= 2:
+            return
+        children[i, slot] = _scipy_id(int(node), n)
+        filled[i] = slot + 1
+
+    for node in range(n):
+        add_child(node, int(parent[node]))
+    for k in range(num_edges):
+        add_child(offset + k, int(parent[offset + k]))
+
+    Z = np.empty((n_merges, 4), dtype=np.float64)
+    for i in range(num_edges):
+        a, b = int(children[i, 0]), int(children[i, 1])
+        if a < 0 or b < 0:
+            raise ValueError(
+                'Union-find merge %s does not have two children (got %s, %s).'
+                % (i, a, b))
+        if a > b:
+            a, b = b, a
+        size_a = 1 if a < n else Z[a - n, 3]
+        size_b = 1 if b < n else Z[b - n, 3]
+        Z[i, 0] = a
+        Z[i, 1] = b
+        Z[i, 2] = values[i]
+        Z[i, 3] = size_a + size_b
+
+    if num_edges == n_merges:
+        return Z
+
+    comp_ids = []
+    comp_sizes = []
+    for node in range(n):
+        if parent[node] == 0:
+            comp_ids.append(node)
+            comp_sizes.append(1)
+    for k in range(num_edges):
+        if parent[offset + k] == 0:
+            comp_ids.append(n + k)
+            comp_sizes.append(int(Z[k, 3]))
+
+    max_d = 0.0
+    if num_edges > 0:
+        max_d = float(np.max(values[:num_edges]))
+        if not np.isfinite(max_d) or max_d < 0.0:
+            max_d = 0.0
+    gap = max_d * 0.05 if max_d > 0.0 else 1.0
+
+    cur_id = comp_ids[0]
+    cur_sz = comp_sizes[0]
+    for t, i in enumerate(range(num_edges, n_merges)):
+        other_id = comp_ids[t + 1]
+        other_sz = comp_sizes[t + 1]
+        a, b = cur_id, other_id
+        if a > b:
+            a, b = b, a
+        Z[i, 0] = a
+        Z[i, 1] = b
+        Z[i, 2] = max_d + gap * (t + 1)
+        Z[i, 3] = cur_sz + other_sz
+        cur_id = n + i
+        cur_sz = int(Z[i, 3])
+
+    return Z
+
+
+def labels_to_link_color_func(Z, labels, palette=None, mixed_color='#BFBFBF'):
+    """Build a ``dendrogram(..., link_color_func=...)`` callable from flat labels.
+
+    SciPy calls ``link_color_func(k)`` with the cluster id of each U-link
+    (``k`` in ``n .. 2n-2``), **not** a sample index. You cannot write
+    ``lambda k: palette[labels[k]]``. This walks ``Z`` instead and paints a
+    link with a cluster color only when both children share that color.
+    Mixed joins and outliers (``label < 0``) use ``mixed_color``.
+
+    The callable returns a matplotlib color **string** (hex), as SciPy requires.
+
+    Parameters
+    ----------
+    Z : ndarray, shape (n - 1, 4)
+        SciPy linkage matrix.
+
+    labels : array, shape (n,)
+        Flat cluster labels, e.g. ``DRUHG.labels_``. Negative values are noise.
+
+    palette : sequence of colors, optional
+        Cycled with ``label % len(palette)``, matching MST plots. Defaults to
+        the DRUHG plot palette.
+
+    mixed_color : str, optional (default ``'#BFBFBF'``)
+        Color for mixed joins and outliers.
+
+    Returns
+    -------
+    link_color_func : callable
+        Pass to ``scipy.cluster.hierarchy.dendrogram``.
+    """
+    from matplotlib.colors import to_hex
+
+    if palette is None:
+        from .plots import _palette
+        palette = _palette
+
+    labels = np.asarray(labels)
+    n = labels.shape[0]
+    if Z.shape[0] != n - 1:
+        raise ValueError(
+            'Z has %s rows, expected %s for %s labels.'
+            % (Z.shape[0], n - 1, n))
+
+    hex_palette = []
+    for c in palette:
+        if isinstance(c, str):
+            hex_palette.append(c)
+        else:
+            hex_palette.append(to_hex(c[:3]))
+
+    colors = [mixed_color] * (2 * n - 1)
+    for i, lab in enumerate(labels):
+        if lab >= 0:
+            colors[i] = hex_palette[int(lab) % len(hex_palette)]
+
+    for i, (a, b) in enumerate(np.asarray(Z[:, :2], dtype=np.intp)):
+        c1, c2 = colors[int(a)], colors[int(b)]
+        colors[n + i] = c1 if c1 == c2 else mixed_color
+
+    def link_color_func(k):
+        return colors[int(k)]
+
+    return link_color_func
+
+
 class DRUHG(BaseEstimator, ClusterMixin):
     def __init__(self, metric='euclidean',
                  algorithm='best',
@@ -423,6 +610,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         self.ranks_ = None
         self.new_data_ = None
         self.buffers_ = None
+        self.linkage_ = None
 
     def fit(self, X, y=None):
         """Perform DRUHG clustering.
@@ -452,6 +640,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         self.values_ = self.buffers_[Buffer.VALUES.value]
         self.ranks_ = self.buffers_[Buffer.RANKS.value]
         self.mst_ = self.buffers_[Buffer.MST.value]
+        self.linkage_ = None
         return self
 
     def fit_predict(self, X, y=None):
@@ -472,12 +661,93 @@ class DRUHG(BaseEstimator, ClusterMixin):
         self.fit(X)
         return self.labels_
 
-    def hierarchy(self):
-        # converts to standard hierarchical tree format
-        # https://joernhees.de/blog/2015/08/26/scipy-hierarchical-clustering-and-dendrogram-tutorial/
-        # TODO: not done yet
-        logging.getLogger(__package__).info('hierarchy() is not implemented yet')
-        return None
+    def hierarchy(self, plot=True, axis=None, labels=None, **kwargs):
+        """Convert the DRUHG tree to SciPy linkage format.
+
+        The matrix matches ``scipy.cluster.hierarchy.linkage`` and the
+        tutorial at
+        https://joernhees.de/blog/2015/08/26/scipy-hierarchical-clustering-and-dendrogram-tutorial/
+
+        Each row is ``[idx1, idx2, dist, sample_count]``. Indices ``0 .. n-1``
+        are the original samples; index ``n + i`` is the cluster formed at
+        row ``i``. ``dist`` is the DRUHG dialectical distance of that merge.
+
+        The result is also stored on ``self.linkage_``. Pass it to
+        ``scipy.cluster.hierarchy.dendrogram``, ``fcluster``, or ``cophenet``.
+        Distances follow DRUHG merge order and are not always monotonic.
+
+        If the spanning tree is a forest (low ``max_ranking``), remaining
+        components are joined with distances slightly above the last real merge.
+
+        Parameters
+        ----------
+        plot : bool, optional (default=True)
+            Draw a dendrogram with ``scipy.cluster.hierarchy.dendrogram``.
+
+        axis : matplotlib axis, optional
+            Axis to draw on. Created if omitted and ``plot=True``.
+
+        labels : array, optional
+            Flat cluster labels (``labels_``) used to color U-links.
+            SciPy's ``link_color_func`` is called with cluster ids
+            ``n .. 2n-2``, not sample indices, so this builds that mapping.
+            A link keeps a cluster color only while both children share it;
+            mixed joins and outliers are gray. This is **not** SciPy's
+            ``labels`` argument (that one is leaf *text*).
+
+        **kwargs :
+            Passed to ``scipy.cluster.hierarchy.dendrogram``.
+
+        Returns
+        -------
+        Z : ndarray, shape (n_samples - 1, 4)
+            SciPy hierarchical clustering linkage matrix.
+        """
+        if self.buffers_ is None or self.buffers_[Buffer.UNIONFIND.value] is None:
+            raise AttributeError('Call fit() before hierarchy().')
+        if self._size < 2:
+            self.linkage_ = np.empty((0, 4), dtype=np.float64)
+            return self.linkage_
+
+        Z = unionfind_to_linkage(
+            self.buffers_[Buffer.UNIONFIND.value],
+            self._size,
+            self.values_,
+            self.num_edges_,
+        )
+        self.linkage_ = Z
+
+        if plot:
+            try:
+                from matplotlib import pyplot as plt
+                from scipy.cluster.hierarchy import dendrogram
+            except ImportError:
+                raise ImportError(
+                    'You must install matplotlib and scipy to plot a dendrogram.')
+
+            dendrogram_kwargs = {
+                'leaf_rotation': 90.,
+                'leaf_font_size': 8.,
+            }
+            dendrogram_kwargs.update(kwargs)
+            if labels is not None and 'link_color_func' not in dendrogram_kwargs:
+                labels_arr = np.asarray(labels)
+                if labels_arr.shape[0] != self._size:
+                    raise ValueError(
+                        'labels length %s != n_samples %s'
+                        % (labels_arr.shape[0], self._size))
+                dendrogram_kwargs['link_color_func'] = labels_to_link_color_func(
+                    Z, labels_arr)
+                dendrogram_kwargs.setdefault('color_threshold', 0)
+            if axis is None:
+                plt.figure(figsize=(25, 10))
+                axis = plt.gca()
+            axis.set_title('Hierarchical Clustering Dendrogram')
+            axis.set_xlabel('sample index')
+            axis.set_ylabel('distance')
+            dendrogram(Z, ax=axis, **dendrogram_kwargs)
+
+        return Z
 
     def relabel(self, exclude=None, size_range=None, limitL=None, limitH=None, fix_outliers=None, **kwargs):
         """Relabeling with the limits on cluster size.
