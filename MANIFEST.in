@@ -1,2 +1,5 @@
-include *.rst *.txt pyproject.toml
-recursive-include druhg *.py *.pyx *.c
+include README.rst LICENSE requirements.txt pyproject.toml
+recursive-include druhg *.py *.pyx *.pxd
+prune druhg/tests
+global-exclude *.c *.so *.pyc
+exclude druhg/_cyheapq.pyx

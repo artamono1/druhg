@@ -18,8 +18,9 @@ import numpy as np
 
 from sklearn.base import BaseEstimator, ClusterMixin
 from scipy.sparse import issparse
-from sklearn.neighbors import KDTree, BallTree
 from joblib.parallel import cpu_count
+
+from ._druhg_neighbors import KDTree, BallTree, KDTREE_VALID_METRICS, BALLTREE_VALID_METRICS, _as_sample_matrix
 
 from ._druhg_tree import UniversalReciprocity
 from ._druhg_label import Clusterizer
@@ -32,15 +33,7 @@ from ._druhg_tree import allocate_buffer_values, allocate_buffer_edgepairs, allo
 from ._druhg_group import allocate_buffer_clusters, allocate_buffer_sizes
 from ._druhg_label import allocate_buffer_labels
 
-KDTREE_VALID_METRICS = [
-    "euclidean", "l2", "minkowski", "p", "manhattan", "cityblock", "l1", "chebyshev", "infinity",
-]
-BALLTREE_VALID_METRICS = KDTREE_VALID_METRICS + [
-    "braycurtis", "canberra", "dice", "hamming", "haversine", "jaccard",
-    "mahalanobis", "rogerstanimoto", "russellrao", "seuclidean",
-    "sokalmichener", "sokalsneath",
-]
-FAST_METRICS = KDTREE_VALID_METRICS + BALLTREE_VALID_METRICS + ["cosine", "arccos"]
+FAST_METRICS = list(dict.fromkeys(KDTREE_VALID_METRICS + BALLTREE_VALID_METRICS))
 
 Buffer = Enum('Buffer', [
     ('UNIONFIND', 10), ('UNIONFIND_FAST', 11),
@@ -151,17 +144,45 @@ def _check_input(X, core_n_jobs, max_ranking, leaf_size, metric, p,
     return printout, core_n_jobs, max_ranking, limitL, limitH
 
 
-def _tune_treealgo(X, metric, algorithm, leaf_size, **kwargs):
+def _coerce_feature_array(X, algorithm, metric):
+    """Interpret a 1-d vector as n samples with one feature."""
+    if type(X) is list:
+        raise ValueError('X must be array! Not a list!')
+    if "precomputed" in str(algorithm).lower() or "precomputed" in str(metric).lower() or issparse(X):
+        return X
+    return _as_sample_matrix(X)
+
+
+def _tree_constructor_kwargs(metric, p, kwargs):
+    tree_kwargs = {}
+    metric_l = metric.lower()
+    if metric_l in ('minkowski', 'p') and p is not None:
+        tree_kwargs['p'] = p
+    for key in ('p', 'w', 'V', 'VI'):
+        if key in kwargs:
+            tree_kwargs[key] = kwargs[key]
+    return tree_kwargs
+
+
+def _tune_treealgo(X, metric, algorithm, leaf_size, p=2, **kwargs):
     algo_code = 0
     tree = None
+    algorithm_l = algorithm.lower()
+    metric_l = metric.lower()
+    tree_kwargs = _tree_constructor_kwargs(metric, p, kwargs)
 
-    if algorithm == 'best':
-        algorithm = 'kd_tree'
+    if algorithm_l == 'best':
+        if metric_l in KDTREE_VALID_METRICS:
+            algorithm_l = 'kd_tree'
+        elif metric_l in BALLTREE_VALID_METRICS:
+            algorithm_l = 'ball_tree'
+        else:
+            algorithm_l = 'kd_tree'
 
-    if algorithm == 'slow':  # todo: add XbyX matrix and forced precomputed
-        algorithm = 'kd_tree'
+    if algorithm_l == 'slow':  # todo: add XbyX matrix and forced precomputed
+        algorithm_l = 'kd_tree'
 
-    if "precomputed" in algorithm.lower() or "precomputed" in metric.lower() or issparse(X):
+    if "precomputed" in algorithm_l or "precomputed" in metric_l or issparse(X):
         algo_code = 2
         if issparse(X):
             algo_code = 3
@@ -172,19 +193,21 @@ def _tune_treealgo(X, metric, algorithm, leaf_size, **kwargs):
         if not X.flags['C_CONTIGUOUS']:
             raise ValueError('Array has to be C_CONTIGUOUS')
 
-        if "kd" in algorithm.lower() and "tree" in algorithm.lower():
+        if "kd" in algorithm_l and "tree" in algorithm_l:
             algo_code = 0
-            if metric not in KDTREE_VALID_METRICS:
+            if metric_l not in KDTREE_VALID_METRICS:
                 raise ValueError('Metric: %s\nCannot be used with KDTree' % metric)
-            tree = KDTree(X, metric=metric, leaf_size=leaf_size, **kwargs)
-        elif "ball" in algorithm.lower() and "tree" in algorithm.lower():
+            tree = KDTree(X, metric=metric_l, leaf_size=leaf_size, **tree_kwargs)
+        elif "ball" in algorithm_l and "tree" in algorithm_l:
             algo_code = 1
-            tree = BallTree(X, metric=metric, leaf_size=leaf_size, **kwargs)
+            if metric_l not in BALLTREE_VALID_METRICS:
+                raise ValueError('Metric: %s\nCannot be used with BallTree' % metric)
+            tree = BallTree(X, metric=metric_l, leaf_size=leaf_size, **tree_kwargs)
         else:
             algo_code = 0
-            if metric not in KDTREE_VALID_METRICS:
+            if metric_l not in KDTREE_VALID_METRICS:
                 raise ValueError('Metric: %s\nCannot be used with KDTree' % metric)
-            tree = KDTree(X, metric=metric, leaf_size=leaf_size, **kwargs)
+            tree = KDTree(X, metric=metric_l, leaf_size=leaf_size, **tree_kwargs)
 
     return tree, algo_code
 
@@ -231,10 +254,10 @@ def druhg(X, max_ranking=16,
 
     Parameters
     ----------
-    X : array matrix of shape (n_samples, n_features), or \
-            array of shape (n_samples, n_samples)
-        A feature array, or array of distances between samples if
-        ``metric='precomputed'``.
+    X : array matrix of shape (n_samples, n_features), \
+            (n_samples,), or (n_samples, n_samples)
+        A feature array (a 1-d vector is n samples with one feature), or
+        array of distances between samples if ``metric='precomputed'``.
 
     max_ranking : int, optional (default=15)
         The maximum number of neighbors to search.
@@ -259,19 +282,16 @@ def druhg(X, max_ranking=16,
         In case of True - extracts edge pairs
 
     metric : string or callable, optional (default='minkowski')
-        The metric to use when calculating distance between instances in a
-        feature array. If metric is a string or callable, it must be one of
-        the options allowed by metrics.pairwise.pairwise_distances for its
-        metric parameter.
-        If metric is "precomputed", X is assumed to be a distance matrix and
-        must be square.
+        Distance used for neighbor search. KD-tree supports Minkowski-family
+        metrics (including cosine via L2-normalized Euclidean). Ball-tree
+        additionally supports metrics such as canberra, braycurtis, haversine,
+        and mahalanobis. If metric is "precomputed", X is a square distance matrix.
 
     p : int, optional (default=2)
         p value to use if using the minkowski metric.
 
     leaf_size : int, optional (default=40)
-        Leaf size for trees responsible for fast nearest
-        neighbour queries.
+        Leaf size for the KD-tree / Ball-tree used in nearest-neighbour queries.
 
     algorithm : string, optional (default='best')
         Exactly, which algorithm to use; DRUHG has variants specialized
@@ -321,17 +341,16 @@ def druhg(X, max_ranking=16,
     if printout:
         logger.info('Druhg is using defaults for: ' + printout)
 
-    if type(X) is list:
-        raise ValueError('X must be array! Not a list!')
+    X = _coerce_feature_array(X, algorithm, metric)
     if not ("precomputed" in algorithm.lower() or "precomputed" in metric.lower() or issparse(X)):
         if not X.flags['C_CONTIGUOUS']:
             logger.info('Converting data array to c-contiguous')
             X = np.array(X, dtype=np.float64, order='C')
-    if X.dtype != np.float64:
-        logger.info('Converting data array to numpy float64')
-        X = X.astype(np.float64)
+        if X.dtype != np.float64:
+            logger.info('Converting data array to numpy float64')
+            X = X.astype(np.float64)
 
-    tree, algo_code = _tune_treealgo(X, metric, algorithm, leaf_size, **kwargs)
+    tree, algo_code = _tune_treealgo(X, metric, algorithm, leaf_size, p=p, **kwargs)
 
     if fix_outliers and do_edges is not False:
         do_edges = True
@@ -410,10 +429,10 @@ class DRUHG(BaseEstimator, ClusterMixin):
 
         Parameters
         ----------
-        X : array or sparse (CSR) matrix of shape (n_samples, n_features), or \
-                array of shape (n_samples, n_samples)
-            A feature array, or array of distances between samples if
-            ``metric='precomputed'``.
+        X : array or sparse (CSR) matrix of shape (n_samples, n_features), \
+                (n_samples,), or (n_samples, n_samples)
+            A feature array (a 1-d vector is n samples with one feature), or
+            array of distances between samples if ``metric='precomputed'``.
 
         Returns
         -------
@@ -423,6 +442,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         kwargs = self.get_params()
         kwargs.update(self._metric_kwargs)
 
+        X = _coerce_feature_array(X, self.algorithm, self.metric)
         self._size = X.shape[0]
         self._raw_data = X
 
@@ -439,10 +459,10 @@ class DRUHG(BaseEstimator, ClusterMixin):
 
         Parameters
         ----------
-        X : array or sparse (CSR) matrix of shape (n_samples, n_features), or \
-                array of shape (n_samples, n_samples)
-            A feature array, or array of distances between samples if
-            ``metric='precomputed'``.
+        X : array or sparse (CSR) matrix of shape (n_samples, n_features), \
+                (n_samples,), or (n_samples, n_samples)
+            A feature array (a 1-d vector is n samples with one feature), or
+            array of distances between samples if ``metric='precomputed'``.
 
         Returns
         -------
@@ -533,6 +553,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         return self
 
     def allocate_buffers(self, XX):
+        XX = _coerce_feature_array(XX, self.algorithm, self.metric)
         self._size = XX.shape[0]
         self._raw_data = XX
         self.buffers_ = _allocate_if_needed(self.buffers_, self._size, False, False)

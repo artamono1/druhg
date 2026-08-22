@@ -21,8 +21,6 @@ from ._druhg_unionfind cimport UnionFind
 
 import _heapq as heapq
 
-from sklearn.neighbors import KDTree, BallTree
-from joblib import Parallel, delayed
 import bisect
 
 cdef np.double_t INF = sys.float_info.max
@@ -48,8 +46,8 @@ cdef class PairwiseDistanceTreeSparse(object):
         cdef np.ndarray[np.double_t, ndim=2] knn_dist
         cdef np.ndarray[np.intp_t, ndim=2] knn_indices
 
-        knn_dist = INF*np.ones((self.data_size, k+1))
-        knn_indices = np.zeros((self.data_size, k+1), dtype=np.intp)
+        knn_dist = INF*np.ones((self.data_size, k))
+        knn_indices = np.zeros((self.data_size, k), dtype=np.intp)
 
         warning = 0
 
@@ -59,21 +57,17 @@ cdef class PairwiseDistanceTreeSparse(object):
             row = self.data_arr.getrow(i)
             idx, data = row.indices, row.data
             sorted = np.argsort(data)
-            j = min(k,len(idx))
-            if idx[sorted[0]] != i:
-                while j:
-                    j -= 1
-                    knn_dist[i][j+1] = data[sorted[j]]
-                    knn_indices[i][j+1] = idx[sorted[j]]
-            else:
-                # edge loops itself
-                warning += 1
-                while j:
-                    j -= 1
-                    knn_dist[i][j] = data[sorted[j]]
-                    knn_indices[i][j] = idx[sorted[j]]
-
-            knn_dist[i][0], knn_indices[i][0] = 0., i # have to add itself. Edge to itself have to be zero!
+            pos = 0
+            for s in sorted:
+                j = idx[s]
+                if j == i:
+                    warning += 1
+                    continue
+                if pos >= k:
+                    break
+                knn_dist[i][pos] = data[s]
+                knn_indices[i][pos] = j
+                pos += 1
 
         if warning:
             logging.getLogger(__package__).warning('Attention!: Sparse matrix has an edge that forms a loop! They were zeroed. '+str(warning))
@@ -100,11 +94,15 @@ cdef class PairwiseDistanceTreeGeneric(object):
             i -= 1
             row = self.data_arr[i]
             sorted = np.argsort(row)
-            j = k
-            while j:
-                j -= 1
-                knn_dist[i][j] = row[sorted[j]]
-                knn_indices[i][j] = sorted[j]
+            pos = 0
+            for j in sorted:
+                if j == i:
+                    continue
+                knn_dist[i][pos] = row[j]
+                knn_indices[i][pos] = j
+                pos += 1
+                if pos == k:
+                    break
 
         return knn_dist, knn_indices
 
@@ -132,8 +130,7 @@ cdef class UniversalReciprocity (object):
         Used only with KDTree/BallTree option.
 
     leaf_size : int, optional (default=20)
-        sklearn K-NearestNeighbor uses it.
-        Used only with KDTree/BallTree option.
+        Leaf size of the injected KDTree/BallTree. Kept for API compatibility.
 
     **kwargs :
         Keyword args passed to the metric.
@@ -177,14 +174,9 @@ cdef class UniversalReciprocity (object):
         self.n_jobs = n_jobs
         self.ball = set()
 
-        # TODO: replace scikit with rdist https://github.com/jackd/numba-neighbors/tree/master
-        if algorithm == 0:
+        if algorithm == 0 or algorithm == 1:
             self.dist_tree = tree
-            self.tree = KDTree(tree.data, metric=metric, leaf_size=leaf_size, **kwargs)
-            self.num_points = self.tree.data.shape[0]
-        elif algorithm == 1:
-            self.dist_tree = tree
-            self.tree = BallTree(tree.data, metric=metric, leaf_size=leaf_size, **kwargs)
+            self.tree = tree
             self.num_points = self.tree.data.shape[0]
         elif algorithm == 2:
             self.dist_tree = PairwiseDistanceTreeGeneric(tree.shape[0], tree)
@@ -264,8 +256,8 @@ cdef class UniversalReciprocity (object):
         distances = knn_dist[i]
 
         rel.reciprocity = INF
-        core_dis = distances[1]
-        for r in range(0, self.max_neighbors_search + 1):
+        core_dis = distances[0]
+        for r in range(0, self.max_neighbors_search):
             j = indices[r]
             if parent == self.U.mark_up(j):
                 continue
@@ -277,16 +269,16 @@ cdef class UniversalReciprocity (object):
             if dis == 0.: # degenerate case.
                 rel.reciprocity = 0.
                 rel.endpoint = j
-                rel.max_rank = bisect.bisect(distances, 0. + self.PRECISION)
+                rel.max_rank = bisect.bisect(distances, 0. + self.PRECISION) + 1
                 return 1
             infinitesimal += dis <= self.PRECISION
 
             odistances = knn_dist[j]
-            if odistances[1] + self.PRECISION < dis:
+            if odistances[0] + self.PRECISION < dis:
                 return 0
 
             rank = r + 1
-            while rank <= self.max_neighbors_search and distances[rank] <= dis + self.PRECISION:
+            while rank < self.max_neighbors_search and distances[rank] <= dis + self.PRECISION:
                 rank += 1
 
             odis = odistances[rank - 1]
@@ -294,20 +286,18 @@ cdef class UniversalReciprocity (object):
                 continue
             if odis + self.PRECISION <= dis :
                 continue
-            if rank <= self.max_neighbors_search and odistances[rank] < dis + self.PRECISION:
+            if rank < self.max_neighbors_search and odistances[rank] < dis + self.PRECISION:
                 continue
-
-            # assert(bisect.bisect(odistances, dis + self.PRECISION) == bisect.bisect(distances, dis + self.PRECISION) )
 
             rel.reciprocity = dis
             rel.endpoint = j
-            rel.max_rank = rank
+            rel.max_rank = rank + 1
             return 1
         return 0
 
     cdef bint _evaluate_reciprocity(self, np.intp_t i, np.intp_t parent, np.ndarray[np.intp_t, ndim=2] knn_indices, np.ndarray[np.double_t, ndim=2] knn_dist, Relation* rel):
         cdef:
-            int rank, orank, r, inter
+            int rank, orank, r, inter, last, olast
             np.intp_t j, \
                 res = 0
 
@@ -322,9 +312,9 @@ cdef class UniversalReciprocity (object):
         distances = knn_dist[i]
 
         self.ball.clear()
-        self.ball.add(indices[0])
+        self.ball.add(i)
         best = INF
-        for r in range(1, self.max_neighbors_search + 1):
+        for r in range(0, self.max_neighbors_search):
 
             dis = distances[r]
             if dis - self.PRECISION > best: # v всегда >= dis по построению
@@ -336,35 +326,33 @@ cdef class UniversalReciprocity (object):
                 continue
             assert(dis > self.PRECISION)
 
-            rank = r + 1
-            while rank <= self.max_neighbors_search and distances[rank] <= dis + self.PRECISION:
-                self.ball.add(indices[rank])
-                rank += 1
-            rank -= 1
+            last = r
+            while last + 1 < self.max_neighbors_search and distances[last + 1] <= dis + self.PRECISION:
+                last += 1
+                self.ball.add(indices[last])
+            rank = last + 1
 
             odistances = knn_dist[j]
-            if odistances[rank] > dis: # outlier part has more information
+            if odistances[last] > dis: # outlier part has more information
                 continue
 
-            oindices: np.intp_t = knn_indices[j]
+            oindices = knn_indices[j]
 
-            orank = 1
+            olast = 0
             inter = 0
-            while orank <= self.max_neighbors_search and odistances[orank] <= dis + self.PRECISION:
-                inter += oindices[orank] != i and oindices[orank] in self.ball
-                orank += 1
-            orank -= 1
-
-            # assert(rank +1 == bisect.bisect(distances, dis + self.PRECISION))
-            # assert(orank +1 == bisect.bisect(odistances, dis + self.PRECISION))  # !reminder! bisect.bisect(odis, dis) >= bisect.bisect_left(odis, dis)
+            while olast < self.max_neighbors_search and odistances[olast] <= dis + self.PRECISION:
+                inter += oindices[olast] != i and oindices[olast] in self.ball
+                olast += 1
+            olast -= 1
+            orank = olast + 1
 
             if rank > orank:
                 continue
             if rank == orank and i < j:
                 continue
 
-            v1 = max(distances[orank] + self.PRECISION,  dis * rank / (orank - inter)) # со своей стороны r<=oR
-            v2 = max(odistances[rank] + self.PRECISION,  dis * orank / (rank - inter)) # с чужой стороны
+            v1 = max(distances[orank - 1] + self.PRECISION,  dis * rank / (orank - inter)) # со своей стороны r<=oR
+            v2 = max(odistances[rank - 1] + self.PRECISION,  dis * orank / (rank - inter)) # с чужой стороны
             v = min(v1, v2)
 
             assert(v!=0)
@@ -400,33 +388,12 @@ cdef class UniversalReciprocity (object):
 
             list heap
 
-        if self.tree.data.shape[0] > 16384 and self.n_jobs > 1: # multicore 2-3x speed up for big datasets
-        # if self.n_jobs > 1:
-            split_cnt = self.num_points // self.n_jobs
-            datasets = []
-            for i in range(self.n_jobs):
-                if i == self.n_jobs - 1:
-                    datasets.append(np.asarray(self.tree.data[i*split_cnt:]))
-                else:
-                    datasets.append(np.asarray(self.tree.data[i*split_cnt:(i+1)*split_cnt]))
-
-            knn_data = Parallel(n_jobs=self.n_jobs)(
-                delayed(self.tree.query)
-                (points,
-                 self.max_neighbors_search + 1,
-                 dualtree=True,
-                 breadth_first=True
-                 )
-                for points in datasets)
-            knn_dist = np.vstack([x[0] for x in knn_data])
-            knn_indices = np.vstack([x[1] for x in knn_data])
-        else:
-            knn_dist, knn_indices = self.dist_tree.query(
-                        self.tree.data,
-                        k=self.max_neighbors_search + 1,
-                        dualtree=True,
-                        breadth_first=True,
-                        )
+        knn_dist, knn_indices = self.dist_tree.query(
+                    self.tree.data,
+                    k=self.max_neighbors_search,
+                    dualtree=True,
+                    breadth_first=True,
+                    )
         heap = []
 #### Initialization and pure reciprocity (ranks equal)
         warn, infinitesimal = 0, 0

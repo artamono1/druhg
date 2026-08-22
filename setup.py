@@ -49,9 +49,10 @@ def requirements():
 
 configuration = {
     'name': 'druhg',
-    'version': '1.8.2',
+    'version': '1.8.3',
     'description': 'Universal clustering based on dialectical materialism',
     'long_description': readme(),
+    'long_description_content_type': 'text/x-rst',
     'classifiers': [
         'Development Status :: 4 - Beta',
         'Intended Audience :: Science/Research',
@@ -72,8 +73,9 @@ configuration = {
     'maintainer': 'Pavel Artamonov',
     'maintainer_email': 'druhg.p@gmail.com',
     'license': 'BSD',
-    'packages': ['druhg', 'druhg.tests'],
+    'packages': ['druhg'],
     'install_requires': requirements(),
+    'python_requires': '>=3.10',
     'ext_modules': [
                     _druhg_unionfind,
                     _druhg_tree,
@@ -83,9 +85,8 @@ configuration = {
                     _druhg_displacement
                     ],
     'zip_safe': False,
+    'include_package_data': False,
     'cmdclass': {'build_ext': CustomBuildExtCommand},
-    'tests_require': ['pytest'],
-    'data_files': ('druhg/_druhg_unionfind.pxd', 'druhg/_druhg_tree.pxd', 'druhg/_druhg_group.pxd', 'druhg/_druhg_group_placement.pxd', 'druhg/_druhg_label.pxd',)
 }
 
 if not HAVE_CYTHON:

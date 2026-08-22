@@ -46,7 +46,7 @@ where:
 - ``D`` — dialectical distance of the connecting edge
 - ``N₁``, ``N₂`` — own and rival sides of a graph
 - ``L₁``, ``L₂`` — unique linked edges
-- ``∑₁ 1 / dᵢ `` — sum of reciprocals of unique linked edges
+- ``∑₁ 1 / dᵢ`` — sum of reciprocals of unique linked edges
 
 A newly formed cluster resists reclusterisation with its internal high ``dᵢ`` and low ``L₁``. Outliers bring ``1`` as ``N₂``, contribute ``1`` to ``L₂``. Eventually a huge external ``D``, ``N₂``, or dilution of ``L₁`` will clusterize anything.
 

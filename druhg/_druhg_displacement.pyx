@@ -26,6 +26,12 @@ from ._druhg_unionfind import UnionFind
 from ._druhg_unionfind cimport UnionFind
 
 
+cdef np.intp_t _n_coords(np.ndarray coords_arr):
+    if coords_arr.ndim == 1:
+        return 1
+    return coords_arr.shape[1]
+
+
 cdef aggregate_coords(UnionFind U, np.ndarray values_arr,
                       np.ndarray group_arr, np.ndarray coords_arr,
                       np.ndarray sizes_arr, np.ndarray clusters_arr):
@@ -96,9 +102,9 @@ cdef side_points_to_center(UnionFind U, np.ndarray values_arr,
         GroupPlacement x_node, y_node, p_node, x_outlier, y_outlier
         np.double_t v
 
-    x_outlier = GroupPlacement(coords_arr.ndim)
-    y_outlier = GroupPlacement(coords_arr.ndim)
-    empty_array = np.zeros(coords_arr.ndim, dtype=np.double)
+    x_outlier = GroupPlacement(_n_coords(coords_arr))
+    y_outlier = GroupPlacement(_n_coords(coords_arr))
+    empty_array = np.zeros(_n_coords(coords_arr), dtype=np.double)
 
     for e in range(loop_size):
         e_coords = coords_arr[e]
@@ -157,9 +163,9 @@ cdef point_vs_other_side(UnionFind U, np.ndarray values_arr,
     logger = logging.getLogger(__package__)
     debug = logger.isEnabledFor(logging.DEBUG)
 
-    x_outlier = GroupPlacement(coords_arr.ndim)
-    y_outlier = GroupPlacement(coords_arr.ndim)
-    empty_array = np.zeros(coords_arr.ndim, dtype=np.double)
+    x_outlier = GroupPlacement(_n_coords(coords_arr))
+    y_outlier = GroupPlacement(_n_coords(coords_arr))
+    empty_array = np.zeros(_n_coords(coords_arr), dtype=np.double)
 
     for e in range(loop_size):
         e_coords = coords_arr[e]
@@ -235,9 +241,9 @@ cdef point_vs_all(UnionFind U, np.ndarray values_arr,
     logger = logging.getLogger(__package__)
     debug = logger.isEnabledFor(logging.DEBUG)
 
-    x_outlier = GroupPlacement(coords_arr.ndim)
-    y_outlier = GroupPlacement(coords_arr.ndim)
-    empty_array = np.zeros(coords_arr.ndim, dtype=np.double)
+    x_outlier = GroupPlacement(_n_coords(coords_arr))
+    y_outlier = GroupPlacement(_n_coords(coords_arr))
+    empty_array = np.zeros(_n_coords(coords_arr), dtype=np.double)
 
     for e in range(loop_size):
         e_coords = coords_arr[e]
@@ -318,7 +324,7 @@ cdef move_points(UnionFind U, np.ndarray values_arr,
 
     group_arr = np.empty(loop_size, dtype=object)
     for i in range(loop_size):
-        group_arr[i] = GroupPlacement(coords_arr.ndim)
+        group_arr[i] = GroupPlacement(_n_coords(coords_arr))
 
     group_arr = aggregate_coords(U, values_arr, group_arr, coords_arr, sizes_arr, clusters_arr)
     side_points_to_center(U, values_arr, group_arr, coords_arr, sizes_arr, clusters_arr)

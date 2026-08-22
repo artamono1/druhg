@@ -73,21 +73,24 @@ class ClusterTree(object):
         self._last_drawn = None
 
     def decrease_dimensions(self):
-        if self._raw_data.shape[1] > 2:
+        raw = np.asarray(self._raw_data)
+        n_features = 1 if raw.ndim == 1 else raw.shape[1]
+        if n_features > 2:
             # Get a 2D projection; if we have a lot of dimensions use PCA first
-            if self._raw_data.shape[1] > 32:
-                # Use PCA to get down to 32 dimension
-                data_for_projection = PCA(n_components=32).fit_transform(self._raw_data)
+            if n_features > 32:
+                data_for_projection = PCA(n_components=32).fit_transform(raw)
             else:
-                data_for_projection = self._raw_data
+                data_for_projection = raw
 
             projection = TSNE().fit_transform(data_for_projection)
-        elif self._raw_data.shape[1] == 2:
-            projection = self._raw_data.copy()
+        elif n_features == 2:
+            projection = np.asarray(raw, dtype=np.float64).copy()
         else:
-            # one dimensional. We need to add dimension
-            projection = self._raw_data.copy()
-            projection = np.array([e for e in enumerate(projection)], int)
+            values = np.asarray(raw, dtype=np.float64).reshape(-1)
+            projection = np.column_stack((
+                np.arange(values.shape[0], dtype=np.float64),
+                values,
+            ))
 
         return projection
 
