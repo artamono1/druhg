@@ -494,8 +494,26 @@ def _build_tree(data, idx_array, idx_start_arr, idx_end_arr, is_leaf, radius, bo
         sp += 1
 
 
-@njit(inline='always', cache=True)
+@njit(cache=True)
+def _fill_leaf_of(idx_array, idx_start, idx_end, is_leaf, leaf_of):
+    n_nodes = is_leaf.shape[0]
+    for i_node in range(n_nodes):
+        if is_leaf[i_node] != 0:
+            for i in range(idx_start[i_node], idx_end[i_node]):
+                leaf_of[idx_array[i]] = i_node
+
+
+@njit(inline='always', fastmath=True, cache=True)
 def _kd_l2_rdist(X, i_pt, data, idx, n_feat):
+    if n_feat == 2:
+        d0 = X[i_pt, 0] - data[idx, 0]
+        d1 = X[i_pt, 1] - data[idx, 1]
+        return d0 * d0 + d1 * d1
+    if n_feat == 3:
+        d0 = X[i_pt, 0] - data[idx, 0]
+        d1 = X[i_pt, 1] - data[idx, 1]
+        d2 = X[i_pt, 2] - data[idx, 2]
+        return d0 * d0 + d1 * d1 + d2 * d2
     d = 0.0
     for j in range(n_feat):
         diff = X[i_pt, j] - data[idx, j]
@@ -503,23 +521,48 @@ def _kd_l2_rdist(X, i_pt, data, idx, n_feat):
     return d
 
 
-@njit(inline='always', cache=True)
-def _kd_l2_min_rdist(bounds, i_node, X, i_pt, n_feat):
-    d = 0.0
+@njit(inline='always', fastmath=True, cache=True)
+def _kd_l2_min_max_rdist(bounds, i_node, X, i_pt, n_feat):
+    min_d = 0.0
+    max_d = 0.0
+    if n_feat == 2:
+        for j in range(2):
+            v = X[i_pt, j]
+            lo = bounds[0, i_node, j]
+            hi = bounds[1, i_node, j]
+            d_lo = lo - v
+            d_hi = v - hi
+            d = max(d_lo, 0.0) + max(d_hi, 0.0)
+            min_d += d * d
+            d = max(abs(d_lo), abs(d_hi))
+            max_d += d * d
+        return min_d, max_d
+    if n_feat == 3:
+        for j in range(3):
+            v = X[i_pt, j]
+            lo = bounds[0, i_node, j]
+            hi = bounds[1, i_node, j]
+            d_lo = lo - v
+            d_hi = v - hi
+            d = max(d_lo, 0.0) + max(d_hi, 0.0)
+            min_d += d * d
+            d = max(abs(d_lo), abs(d_hi))
+            max_d += d * d
+        return min_d, max_d
     for j in range(n_feat):
         v = X[i_pt, j]
         lo = bounds[0, i_node, j]
         hi = bounds[1, i_node, j]
-        if v < lo:
-            delta = lo - v
-            d += delta * delta
-        elif v > hi:
-            delta = v - hi
-            d += delta * delta
-    return d
+        d_lo = lo - v
+        d_hi = v - hi
+        d = max(d_lo, 0.0) + max(d_hi, 0.0)
+        min_d += d * d
+        d = max(abs(d_lo), abs(d_hi))
+        max_d += d * d
+    return min_d, max_d
 
 
-@njit(inline='always', cache=True)
+@njit(inline='always', fastmath=True, cache=True)
 def _kd_l1_rdist(X, i_pt, data, idx, n_feat):
     d = 0.0
     for j in range(n_feat):
@@ -527,48 +570,73 @@ def _kd_l1_rdist(X, i_pt, data, idx, n_feat):
     return d
 
 
-@njit(inline='always', cache=True)
-def _kd_l1_min_rdist(bounds, i_node, X, i_pt, n_feat):
-    d = 0.0
+@njit(inline='always', fastmath=True, cache=True)
+def _kd_l1_min_max_rdist(bounds, i_node, X, i_pt, n_feat):
+    min_d = 0.0
+    max_d = 0.0
     for j in range(n_feat):
         v = X[i_pt, j]
         lo = bounds[0, i_node, j]
         hi = bounds[1, i_node, j]
-        if v < lo:
-            d += lo - v
-        elif v > hi:
-            d += v - hi
-    return d
+        d_lo = lo - v
+        d_hi = v - hi
+        min_d += max(d_lo, 0.0) + max(d_hi, 0.0)
+        max_d += max(abs(d_lo), abs(d_hi))
+    return min_d, max_d
+
+
+@njit(inline='always', cache=True)
+def _scan_node_kd_l2(X, i_pt, data, idx_array, idx_start, idx_end, i_node, dist, ind, tau):
+    n_feat = data.shape[1]
+    for i in range(idx_start[i_node], idx_end[i_node]):
+        idx = idx_array[i]
+        if idx == i_pt:
+            continue
+        d = _kd_l2_rdist(X, i_pt, data, idx, n_feat)
+        if d <= tau:
+            tau = _heap_push(dist, ind, i_pt, d, idx)
+    return tau
+
+
+@njit(inline='always', cache=True)
+def _scan_node_kd_l1(X, i_pt, data, idx_array, idx_start, idx_end, i_node, dist, ind, tau):
+    n_feat = data.shape[1]
+    for i in range(idx_start[i_node], idx_end[i_node]):
+        idx = idx_array[i]
+        if idx == i_pt:
+            continue
+        d = _kd_l1_rdist(X, i_pt, data, idx, n_feat)
+        if d <= tau:
+            tau = _heap_push(dist, ind, i_pt, d, idx)
+    return tau
 
 
 @njit(cache=True)
-def _query_one_kd_l2(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, bounds, dist, ind):
+def _dfs_kd_l2(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, bounds,
+               dist, ind, tau, root, stack_node, stack_lb):
     n_feat = data.shape[1]
-    stack_node = np.empty(_STACK_CAP, dtype=np.intp)
-    stack_lb = np.empty(_STACK_CAP, dtype=np.float64)
-    tau = dist[i_pt, 0]
-    stack_node[0] = 0
-    stack_lb[0] = _kd_l2_min_rdist(bounds, 0, X, i_pt, n_feat)
+    mn, mx = _kd_l2_min_max_rdist(bounds, root, X, i_pt, n_feat)
+    if mn > tau:
+        return tau
+    stack_node[0] = root
+    stack_lb[0] = mn
     sp = 1
     while sp > 0:
         sp -= 1
         i_node = stack_node[sp]
-        reduced_lb = stack_lb[sp]
-        if reduced_lb > tau:
+        if stack_lb[sp] > tau:
             continue
-        if is_leaf[i_node]:
-            for i in range(idx_start[i_node], idx_end[i_node]):
-                idx = idx_array[i]
-                if idx == i_pt:
-                    continue
-                d = _kd_l2_rdist(X, i_pt, data, idx, n_feat)
-                if d <= tau:
-                    tau = _heap_push(dist, ind, i_pt, d, idx)
+        mn, mx = _kd_l2_min_max_rdist(bounds, i_node, X, i_pt, n_feat)
+        if mn > tau:
+            continue
+        if mx <= tau or is_leaf[i_node]:
+            tau = _scan_node_kd_l2(X, i_pt, data, idx_array, idx_start, idx_end,
+                                   i_node, dist, ind, tau)
             continue
         i1 = 2 * i_node + 1
         i2 = i1 + 1
-        lb1 = _kd_l2_min_rdist(bounds, i1, X, i_pt, n_feat)
-        lb2 = _kd_l2_min_rdist(bounds, i2, X, i_pt, n_feat)
+        lb1, _ = _kd_l2_min_max_rdist(bounds, i1, X, i_pt, n_feat)
+        lb2, _ = _kd_l2_min_max_rdist(bounds, i2, X, i_pt, n_feat)
         if lb1 <= lb2:
             if lb2 <= tau:
                 stack_node[sp] = i2
@@ -587,36 +655,35 @@ def _query_one_kd_l2(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, boun
                 stack_node[sp] = i2
                 stack_lb[sp] = lb2
                 sp += 1
+    return tau
 
 
 @njit(cache=True)
-def _query_one_kd_l1(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, bounds, dist, ind):
+def _dfs_kd_l1(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, bounds,
+               dist, ind, tau, root, stack_node, stack_lb):
     n_feat = data.shape[1]
-    stack_node = np.empty(_STACK_CAP, dtype=np.intp)
-    stack_lb = np.empty(_STACK_CAP, dtype=np.float64)
-    tau = dist[i_pt, 0]
-    stack_node[0] = 0
-    stack_lb[0] = _kd_l1_min_rdist(bounds, 0, X, i_pt, n_feat)
+    mn, mx = _kd_l1_min_max_rdist(bounds, root, X, i_pt, n_feat)
+    if mn > tau:
+        return tau
+    stack_node[0] = root
+    stack_lb[0] = mn
     sp = 1
     while sp > 0:
         sp -= 1
         i_node = stack_node[sp]
-        reduced_lb = stack_lb[sp]
-        if reduced_lb > tau:
+        if stack_lb[sp] > tau:
             continue
-        if is_leaf[i_node]:
-            for i in range(idx_start[i_node], idx_end[i_node]):
-                idx = idx_array[i]
-                if idx == i_pt:
-                    continue
-                d = _kd_l1_rdist(X, i_pt, data, idx, n_feat)
-                if d <= tau:
-                    tau = _heap_push(dist, ind, i_pt, d, idx)
+        mn, mx = _kd_l1_min_max_rdist(bounds, i_node, X, i_pt, n_feat)
+        if mn > tau:
+            continue
+        if mx <= tau or is_leaf[i_node]:
+            tau = _scan_node_kd_l1(X, i_pt, data, idx_array, idx_start, idx_end,
+                                   i_node, dist, ind, tau)
             continue
         i1 = 2 * i_node + 1
         i2 = i1 + 1
-        lb1 = _kd_l1_min_rdist(bounds, i1, X, i_pt, n_feat)
-        lb2 = _kd_l1_min_rdist(bounds, i2, X, i_pt, n_feat)
+        lb1, _ = _kd_l1_min_max_rdist(bounds, i1, X, i_pt, n_feat)
+        lb2, _ = _kd_l1_min_max_rdist(bounds, i2, X, i_pt, n_feat)
         if lb1 <= lb2:
             if lb2 <= tau:
                 stack_node[sp] = i2
@@ -635,27 +702,62 @@ def _query_one_kd_l1(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, boun
                 stack_node[sp] = i2
                 stack_lb[sp] = lb2
                 sp += 1
+    return tau
 
 
 @njit(cache=True)
-def _query_one(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, radius, bounds,
-               tree_kind, metric_id, p, w, V, VI, has_w, has_V, has_VI, dist, ind):
-    n_feat = data.shape[1]
-    pt = np.empty(n_feat, dtype=np.float64)
-    for j in range(n_feat):
-        pt[j] = X[i_pt, j]
-    stack_node = np.empty(_STACK_CAP, dtype=np.intp)
-    stack_lb = np.empty(_STACK_CAP, dtype=np.float64)
+def _query_one_kd_l2(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, bounds,
+                     leaf_of, dist, ind, stack_node, stack_lb):
     tau = dist[i_pt, 0]
-    stack_node[0] = 0
-    stack_lb[0] = _min_rdist(tree_kind, bounds, radius, 0, pt, metric_id, p,
-                             w, V, VI, has_w, has_V, has_VI)
+    start = leaf_of[i_pt] if i_pt < leaf_of.shape[0] else -1
+    if start < 0:
+        return _dfs_kd_l2(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, bounds,
+                          dist, ind, tau, 0, stack_node, stack_lb)
+    tau = _scan_node_kd_l2(X, i_pt, data, idx_array, idx_start, idx_end,
+                           start, dist, ind, tau)
+    i_node = start
+    while i_node != 0:
+        sibling = i_node + 1 if i_node % 2 == 1 else i_node - 1
+        tau = _dfs_kd_l2(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, bounds,
+                         dist, ind, tau, sibling, stack_node, stack_lb)
+        i_node = (i_node - 1) // 2
+    return tau
+
+
+@njit(cache=True)
+def _query_one_kd_l1(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, bounds,
+                     leaf_of, dist, ind, stack_node, stack_lb):
+    tau = dist[i_pt, 0]
+    start = leaf_of[i_pt] if i_pt < leaf_of.shape[0] else -1
+    if start < 0:
+        return _dfs_kd_l1(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, bounds,
+                          dist, ind, tau, 0, stack_node, stack_lb)
+    tau = _scan_node_kd_l1(X, i_pt, data, idx_array, idx_start, idx_end,
+                           start, dist, ind, tau)
+    i_node = start
+    while i_node != 0:
+        sibling = i_node + 1 if i_node % 2 == 1 else i_node - 1
+        tau = _dfs_kd_l1(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, bounds,
+                         dist, ind, tau, sibling, stack_node, stack_lb)
+        i_node = (i_node - 1) // 2
+    return tau
+
+
+@njit(cache=True)
+def _dfs_generic(X, i_pt, pt, data, idx_array, idx_start, idx_end, is_leaf, radius, bounds,
+                 tree_kind, metric_id, p, w, V, VI, has_w, has_V, has_VI, dist, ind,
+                 tau, root, stack_node, stack_lb):
+    lb = _min_rdist(tree_kind, bounds, radius, root, pt, metric_id, p,
+                    w, V, VI, has_w, has_V, has_VI)
+    if lb > tau:
+        return tau
+    stack_node[0] = root
+    stack_lb[0] = lb
     sp = 1
     while sp > 0:
         sp -= 1
         i_node = stack_node[sp]
-        reduced_lb = stack_lb[sp]
-        if reduced_lb > tau:
+        if stack_lb[sp] > tau:
             continue
         if is_leaf[i_node]:
             for i in range(idx_start[i_node], idx_end[i_node]):
@@ -690,14 +792,50 @@ def _query_one(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, radius, bo
                 stack_node[sp] = i2
                 stack_lb[sp] = lb2
                 sp += 1
+    return tau
+
+
+@njit(cache=True)
+def _query_one(X, i_pt, data, idx_array, idx_start, idx_end, is_leaf, radius, bounds,
+               tree_kind, metric_id, p, w, V, VI, has_w, has_V, has_VI, dist, ind,
+               leaf_of, stack_node, stack_lb):
+    n_feat = data.shape[1]
+    pt = np.empty(n_feat, dtype=np.float64)
+    for j in range(n_feat):
+        pt[j] = X[i_pt, j]
+    tau = dist[i_pt, 0]
+    start = leaf_of[i_pt] if i_pt < leaf_of.shape[0] else -1
+    if start < 0:
+        return _dfs_generic(X, i_pt, pt, data, idx_array, idx_start, idx_end, is_leaf, radius, bounds,
+                            tree_kind, metric_id, p, w, V, VI, has_w, has_V, has_VI, dist, ind,
+                            tau, 0, stack_node, stack_lb)
+    for i in range(idx_start[start], idx_end[start]):
+        idx = idx_array[i]
+        if idx == i_pt:
+            continue
+        d = _rdist(pt, data[idx], metric_id, p, w, V, VI, has_w, has_V, has_VI)
+        if d <= tau:
+            tau = _heap_push(dist, ind, i_pt, d, idx)
+    i_node = start
+    while i_node != 0:
+        sibling = i_node + 1 if i_node % 2 == 1 else i_node - 1
+        tau = _dfs_generic(X, i_pt, pt, data, idx_array, idx_start, idx_end, is_leaf, radius, bounds,
+                           tree_kind, metric_id, p, w, V, VI, has_w, has_V, has_VI, dist, ind,
+                           tau, sibling, stack_node, stack_lb)
+        i_node = (i_node - 1) // 2
+    return tau
 
 
 @njit(parallel=True, cache=True)
-def _query_all_kd_l2(X, data, idx_array, idx_start, idx_end, is_leaf, bounds, dist, ind, do_sort):
+def _query_all_kd_l2(X, data, idx_array, idx_start, idx_end, is_leaf, bounds, leaf_of,
+                     dist, ind, do_sort):
     n_queries = X.shape[0]
     k_nbrs = dist.shape[1]
+    stack_node = np.empty((n_queries, _STACK_CAP), dtype=np.intp)
+    stack_lb = np.empty((n_queries, _STACK_CAP), dtype=np.float64)
     for i in prange(n_queries):
-        _query_one_kd_l2(X, i, data, idx_array, idx_start, idx_end, is_leaf, bounds, dist, ind)
+        _query_one_kd_l2(X, i, data, idx_array, idx_start, idx_end, is_leaf, bounds,
+                         leaf_of, dist, ind, stack_node[i], stack_lb[i])
         if do_sort:
             _sort_row(dist, ind, i, k_nbrs)
         for j in range(k_nbrs):
@@ -705,11 +843,15 @@ def _query_all_kd_l2(X, data, idx_array, idx_start, idx_end, is_leaf, bounds, di
 
 
 @njit(cache=True)
-def _query_all_kd_l2_seq(X, data, idx_array, idx_start, idx_end, is_leaf, bounds, dist, ind, do_sort):
+def _query_all_kd_l2_seq(X, data, idx_array, idx_start, idx_end, is_leaf, bounds, leaf_of,
+                         dist, ind, do_sort):
     n_queries = X.shape[0]
     k_nbrs = dist.shape[1]
+    stack_node = np.empty((_STACK_CAP,), dtype=np.intp)
+    stack_lb = np.empty((_STACK_CAP,), dtype=np.float64)
     for i in range(n_queries):
-        _query_one_kd_l2(X, i, data, idx_array, idx_start, idx_end, is_leaf, bounds, dist, ind)
+        _query_one_kd_l2(X, i, data, idx_array, idx_start, idx_end, is_leaf, bounds,
+                         leaf_of, dist, ind, stack_node, stack_lb)
         if do_sort:
             _sort_row(dist, ind, i, k_nbrs)
         for j in range(k_nbrs):
@@ -717,21 +859,29 @@ def _query_all_kd_l2_seq(X, data, idx_array, idx_start, idx_end, is_leaf, bounds
 
 
 @njit(parallel=True, cache=True)
-def _query_all_kd_l1(X, data, idx_array, idx_start, idx_end, is_leaf, bounds, dist, ind, do_sort):
+def _query_all_kd_l1(X, data, idx_array, idx_start, idx_end, is_leaf, bounds, leaf_of,
+                     dist, ind, do_sort):
     n_queries = X.shape[0]
     k_nbrs = dist.shape[1]
+    stack_node = np.empty((n_queries, _STACK_CAP), dtype=np.intp)
+    stack_lb = np.empty((n_queries, _STACK_CAP), dtype=np.float64)
     for i in prange(n_queries):
-        _query_one_kd_l1(X, i, data, idx_array, idx_start, idx_end, is_leaf, bounds, dist, ind)
+        _query_one_kd_l1(X, i, data, idx_array, idx_start, idx_end, is_leaf, bounds,
+                         leaf_of, dist, ind, stack_node[i], stack_lb[i])
         if do_sort:
             _sort_row(dist, ind, i, k_nbrs)
 
 
 @njit(cache=True)
-def _query_all_kd_l1_seq(X, data, idx_array, idx_start, idx_end, is_leaf, bounds, dist, ind, do_sort):
+def _query_all_kd_l1_seq(X, data, idx_array, idx_start, idx_end, is_leaf, bounds, leaf_of,
+                         dist, ind, do_sort):
     n_queries = X.shape[0]
     k_nbrs = dist.shape[1]
+    stack_node = np.empty((_STACK_CAP,), dtype=np.intp)
+    stack_lb = np.empty((_STACK_CAP,), dtype=np.float64)
     for i in range(n_queries):
-        _query_one_kd_l1(X, i, data, idx_array, idx_start, idx_end, is_leaf, bounds, dist, ind)
+        _query_one_kd_l1(X, i, data, idx_array, idx_start, idx_end, is_leaf, bounds,
+                         leaf_of, dist, ind, stack_node, stack_lb)
         if do_sort:
             _sort_row(dist, ind, i, k_nbrs)
 
@@ -739,12 +889,15 @@ def _query_all_kd_l1_seq(X, data, idx_array, idx_start, idx_end, is_leaf, bounds
 @njit(parallel=True, cache=True)
 def _query_all(X, data, idx_array, idx_start, idx_end, is_leaf, radius, bounds,
                tree_kind, metric_id, p, w, V, VI, has_w, has_V, has_VI,
-               dist, ind, do_sort):
+               leaf_of, dist, ind, do_sort):
     n_queries = X.shape[0]
     k_nbrs = dist.shape[1]
+    stack_node = np.empty((n_queries, _STACK_CAP), dtype=np.intp)
+    stack_lb = np.empty((n_queries, _STACK_CAP), dtype=np.float64)
     for i in prange(n_queries):
         _query_one(X, i, data, idx_array, idx_start, idx_end, is_leaf, radius, bounds,
-                   tree_kind, metric_id, p, w, V, VI, has_w, has_V, has_VI, dist, ind)
+                   tree_kind, metric_id, p, w, V, VI, has_w, has_V, has_VI, dist, ind,
+                   leaf_of, stack_node[i], stack_lb[i])
         if do_sort:
             _sort_row(dist, ind, i, k_nbrs)
         for j in range(k_nbrs):
@@ -754,12 +907,15 @@ def _query_all(X, data, idx_array, idx_start, idx_end, is_leaf, radius, bounds,
 @njit(cache=True)
 def _query_all_seq(X, data, idx_array, idx_start, idx_end, is_leaf, radius, bounds,
                    tree_kind, metric_id, p, w, V, VI, has_w, has_V, has_VI,
-                   dist, ind, do_sort):
+                   leaf_of, dist, ind, do_sort):
     n_queries = X.shape[0]
     k_nbrs = dist.shape[1]
+    stack_node = np.empty((_STACK_CAP,), dtype=np.intp)
+    stack_lb = np.empty((_STACK_CAP,), dtype=np.float64)
     for i in range(n_queries):
         _query_one(X, i, data, idx_array, idx_start, idx_end, is_leaf, radius, bounds,
-                   tree_kind, metric_id, p, w, V, VI, has_w, has_V, has_VI, dist, ind)
+                   tree_kind, metric_id, p, w, V, VI, has_w, has_V, has_VI, dist, ind,
+                   leaf_of, stack_node, stack_lb)
         if do_sort:
             _sort_row(dist, ind, i, k_nbrs)
         for j in range(k_nbrs):
@@ -867,6 +1023,7 @@ class NeighborTree:
         self._is_leaf = np.zeros(self.n_nodes, dtype=np.intp)
         self._radius = np.zeros(self.n_nodes, dtype=np.float64)
         self._bounds = np.zeros((2, self.n_nodes, n_features), dtype=np.float64)
+        self._leaf_of = np.zeros(n_samples, dtype=np.intp)
 
         _build_tree(
             self._tree_data, self._idx_array, self._idx_start, self._idx_end,
@@ -874,6 +1031,7 @@ class NeighborTree:
             self.tree_kind, self.metric_id, self.p, self._weight, self._V, self._VI,
             self.has_weight, self.has_V, self.has_VI,
         )
+        _fill_leaf_of(self._idx_array, self._idx_start, self._idx_end, self._is_leaf, self._leaf_of)
 
     def __reduce__(self):
         cls = KDTree if self.tree_kind == TREE_KD else BallTree
@@ -909,7 +1067,7 @@ class NeighborTree:
         parallel = n_queries >= 128
         args = (
             X, self._tree_data, self._idx_array, self._idx_start, self._idx_end,
-            self._is_leaf, self._bounds, dist_arr, ind_arr, do_sort,
+            self._is_leaf, self._bounds, self._leaf_of, dist_arr, ind_arr, do_sort,
         )
         if self.tree_kind == TREE_KD and self.metric_id == MET_EUCLIDEAN and not self.has_weight:
             (_query_all_kd_l2 if parallel else _query_all_kd_l2_seq)(*args)
@@ -920,7 +1078,7 @@ class NeighborTree:
                 X, self._tree_data, self._idx_array, self._idx_start, self._idx_end,
                 self._is_leaf, self._radius, self._bounds, self.tree_kind, self.metric_id,
                 self.p, self._weight, self._V, self._VI, self.has_weight, self.has_V,
-                self.has_VI, dist_arr, ind_arr, do_sort,
+                self.has_VI, self._leaf_of, dist_arr, ind_arr, do_sort,
             )
             (_query_all if parallel else _query_all_seq)(*generic)
 
