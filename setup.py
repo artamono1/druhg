@@ -29,8 +29,6 @@ _druhg_unionfind = Extension('druhg._druhg_unionfind',
                          sources=['druhg/_druhg_unionfind.pyx'])
 _druhg_tree = Extension('druhg._druhg_tree',
                          sources=['druhg/_druhg_tree.pyx'])
-_druhg_neighbors = Extension('druhg._druhg_neighbors',
-                         sources=['druhg/_druhg_neighbors.pyx'])
 _druhg_group = Extension('druhg._druhg_group',
                          sources=['druhg/_druhg_group.pyx'])
 _druhg_label = Extension('druhg._druhg_label',
@@ -80,7 +78,6 @@ configuration = {
     'python_requires': '>=3.10',
     'ext_modules': [
                     _druhg_unionfind,
-                    _druhg_neighbors,
                     _druhg_tree,
                     _druhg_group,
                     _druhg_label,
