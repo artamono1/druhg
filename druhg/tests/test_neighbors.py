@@ -6,9 +6,21 @@ from scipy.spatial.distance import cdist
 from druhg._druhg_neighbors import KDTree, BallTree
 
 
-def _brute_knn(X, Y, k, metric, **kwargs):
+def _brute_knn(X, Y, k, metric, exclude_self=True, **kwargs):
     scipy_metric = 'cityblock' if metric == 'manhattan' else metric
     D = cdist(Y, X, metric=scipy_metric, **kwargs)
+    if exclude_self:
+        if Y.shape == X.shape and np.array_equal(Y, X):
+            np.fill_diagonal(D, np.inf)
+        elif np.shares_memory(Y, X):
+            x0 = X.ctypes.data
+            step = X.strides[0]
+            y0 = Y.ctypes.data
+            ystep = Y.strides[0]
+            for i in range(len(Y)):
+                j = (y0 + i * ystep - x0) // step
+                if 0 <= j < len(X):
+                    D[i, j] = np.inf
     idx = np.argpartition(D, kth=k - 1, axis=1)[:, :k]
     dist = np.take_along_axis(D, idx, axis=1)
     order = np.argsort(dist, axis=1)
@@ -33,8 +45,8 @@ def test_knn_matches_brute(Tree, metric, kwargs):
     dist, ind = tree.query(X, k=k)
     brute_dist, _ = _brute_knn(X, X, k, metric, **kwargs)
     np.testing.assert_allclose(dist, brute_dist, rtol=1e-7, atol=1e-9)
-    np.testing.assert_allclose(dist[:, 0], 0, atol=1e-12)
-    np.testing.assert_array_equal(ind[:, 0], np.arange(len(X)))
+    assert not np.any(ind == np.arange(len(X))[:, None])
+    assert np.all(dist[:, 0] >= 0)
 
 
 @pytest.mark.parametrize('Tree', [KDTree, BallTree])
@@ -46,6 +58,7 @@ def test_query_subset_matches_brute(Tree):
     dist, ind = tree.query(Y, k=4, dualtree=True, breadth_first=True)
     brute_dist, _ = _brute_knn(X, Y, 4, 'euclidean')
     np.testing.assert_allclose(dist, brute_dist, rtol=1e-7, atol=1e-9)
+    assert not np.any(ind == np.arange(10, 25)[:, None])
 
 
 def test_balltree_extra_metrics():
@@ -69,7 +82,7 @@ def test_query_k_bounds():
     X = np.ascontiguousarray([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]])
     tree = KDTree(X, leaf_size=1)
     with pytest.raises(ValueError):
-        tree.query(X, k=4)
+        tree.query(X, k=3)
     with pytest.raises(ValueError):
         tree.query(X, k=0)
 
@@ -98,9 +111,10 @@ def test_sklearn_agreement_if_present():
     ):
         ours = Ours(X, leaf_size=10, metric=metric)
         theirs = Theirs(X, leaf_size=10, metric=metric)
-        d0, _ = ours.query(X, k=k)
-        d1, _ = theirs.query(X, k=k)
-        np.testing.assert_allclose(d0, d1, rtol=1e-7, atol=1e-9)
+        d0, i0 = ours.query(X, k=k)
+        d1, i1 = theirs.query(X, k=k + 1)
+        np.testing.assert_allclose(d0, d1[:, 1:], rtol=1e-7, atol=1e-9)
+        np.testing.assert_array_equal(i0, i1[:, 1:])
 
 
 def test_one_dimensional_knn_and_druhg():
