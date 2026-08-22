@@ -29,6 +29,8 @@ _druhg_unionfind = Extension('druhg._druhg_unionfind',
                          sources=['druhg/_druhg_unionfind.pyx'])
 _druhg_tree = Extension('druhg._druhg_tree',
                          sources=['druhg/_druhg_tree.pyx'])
+_druhg_neighbors = Extension('druhg._druhg_neighbors',
+                         sources=['druhg/_druhg_neighbors.pyx'])
 _druhg_group = Extension('druhg._druhg_group',
                          sources=['druhg/_druhg_group.pyx'])
 _druhg_label = Extension('druhg._druhg_label',
@@ -52,6 +54,7 @@ configuration = {
     'version': '1.8.2',
     'description': 'Universal clustering based on dialectical materialism',
     'long_description': readme(),
+    'long_description_content_type': 'text/x-rst',
     'classifiers': [
         'Development Status :: 4 - Beta',
         'Intended Audience :: Science/Research',
@@ -72,10 +75,12 @@ configuration = {
     'maintainer': 'Pavel Artamonov',
     'maintainer_email': 'druhg.p@gmail.com',
     'license': 'BSD',
-    'packages': ['druhg', 'druhg.tests'],
+    'packages': ['druhg'],
     'install_requires': requirements(),
+    'python_requires': '>=3.10',
     'ext_modules': [
                     _druhg_unionfind,
+                    _druhg_neighbors,
                     _druhg_tree,
                     _druhg_group,
                     _druhg_label,
@@ -83,9 +88,8 @@ configuration = {
                     _druhg_displacement
                     ],
     'zip_safe': False,
+    'include_package_data': False,
     'cmdclass': {'build_ext': CustomBuildExtCommand},
-    'tests_require': ['pytest'],
-    'data_files': ('druhg/_druhg_unionfind.pxd', 'druhg/_druhg_tree.pxd', 'druhg/_druhg_group.pxd', 'druhg/_druhg_group_placement.pxd', 'druhg/_druhg_label.pxd',)
 }
 
 if not HAVE_CYTHON:

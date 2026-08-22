@@ -21,7 +21,6 @@ from ._druhg_unionfind cimport UnionFind
 
 import _heapq as heapq
 
-from sklearn.neighbors import KDTree, BallTree
 from joblib import Parallel, delayed
 import bisect
 
@@ -132,8 +131,7 @@ cdef class UniversalReciprocity (object):
         Used only with KDTree/BallTree option.
 
     leaf_size : int, optional (default=20)
-        sklearn K-NearestNeighbor uses it.
-        Used only with KDTree/BallTree option.
+        Leaf size of the injected KDTree/BallTree. Kept for API compatibility.
 
     **kwargs :
         Keyword args passed to the metric.
@@ -177,14 +175,9 @@ cdef class UniversalReciprocity (object):
         self.n_jobs = n_jobs
         self.ball = set()
 
-        # TODO: replace scikit with rdist https://github.com/jackd/numba-neighbors/tree/master
-        if algorithm == 0:
+        if algorithm == 0 or algorithm == 1:
             self.dist_tree = tree
-            self.tree = KDTree(tree.data, metric=metric, leaf_size=leaf_size, **kwargs)
-            self.num_points = self.tree.data.shape[0]
-        elif algorithm == 1:
-            self.dist_tree = tree
-            self.tree = BallTree(tree.data, metric=metric, leaf_size=leaf_size, **kwargs)
+            self.tree = tree
             self.num_points = self.tree.data.shape[0]
         elif algorithm == 2:
             self.dist_tree = PairwiseDistanceTreeGeneric(tree.shape[0], tree)
@@ -346,7 +339,7 @@ cdef class UniversalReciprocity (object):
             if odistances[rank] > dis: # outlier part has more information
                 continue
 
-            oindices: np.intp_t = knn_indices[j]
+            oindices = knn_indices[j]
 
             orank = 1
             inter = 0
@@ -410,7 +403,7 @@ cdef class UniversalReciprocity (object):
                 else:
                     datasets.append(np.asarray(self.tree.data[i*split_cnt:(i+1)*split_cnt]))
 
-            knn_data = Parallel(n_jobs=self.n_jobs)(
+            knn_data = Parallel(n_jobs=self.n_jobs, prefer='threads')(
                 delayed(self.tree.query)
                 (points,
                  self.max_neighbors_search + 1,
