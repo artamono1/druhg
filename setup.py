@@ -49,7 +49,7 @@ def requirements():
 
 configuration = {
     'name': 'druhg',
-    'version': '1.8.2',
+    'version': '1.8.3',
     'description': 'Universal clustering based on dialectical materialism',
     'long_description': readme(),
     'long_description_content_type': 'text/x-rst',
