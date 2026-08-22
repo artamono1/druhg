@@ -39,6 +39,28 @@ cdef int MET_HAVERSINE = 15
 cdef int MET_COSINE = 16
 cdef int MET_ARCCOS = 17
 
+
+def _as_sample_matrix(X, n_features=None):
+    """Turn 1-d vectors into a 2-d sample matrix.
+
+    Training data of shape (n,) is n points with one feature.
+    A 1-d query against a 1-d tree is n query points; otherwise it is one
+    query with ``n_features`` coordinates (sklearn-style).
+    """
+    X = np.asarray(X, dtype=np.float64)
+    if X.ndim == 0:
+        X = X.reshape(1, 1)
+    elif X.ndim == 1:
+        if n_features is None or n_features == 1:
+            X = X.reshape(-1, 1)
+        else:
+            X = X.reshape(1, -1)
+    elif X.ndim != 2:
+        raise ValueError('X must be a 1- or 2-dimensional array')
+    if not X.flags['C_CONTIGUOUS']:
+        X = np.ascontiguousarray(X)
+    return X
+
 cdef dict METRIC_CODES = {
     'euclidean': MET_EUCLIDEAN,
     'l2': MET_EUCLIDEAN,
@@ -472,11 +494,7 @@ cdef class NeighborTree:
         if leaf_size < 1:
             raise ValueError('leaf_size must be greater than or equal to 1')
 
-        X = np.asarray(X, dtype=np.float64)
-        if X.ndim != 2:
-            raise ValueError('X must be a 2-dimensional array')
-        if not X.flags['C_CONTIGUOUS']:
-            X = np.ascontiguousarray(X)
+        X = _as_sample_matrix(X)
         n_samples = X.shape[0]
         n_features = X.shape[1]
         if n_samples == 0:
@@ -737,17 +755,13 @@ cdef class NeighborTree:
         cdef np.float64_t lb
         cdef bint do_sort = sort_results
 
-        X = np.asarray(X, dtype=np.float64)
-        if X.ndim == 1:
-            X = X.reshape(1, -1)
-        if X.shape[X.ndim - 1] != self.n_features:
+        X = _as_sample_matrix(X, n_features=self.n_features)
+        if X.shape[1] != self.n_features:
             raise ValueError('query data dimension must match training data dimension')
         if k < 1:
             raise ValueError('k must be at least 1')
         if k > self.n_samples:
             raise ValueError('k must be less than or equal to the number of training points')
-        if not X.flags['C_CONTIGUOUS']:
-            X = np.ascontiguousarray(X)
         if self.angular_mode:
             norms = np.linalg.norm(X, axis=1, keepdims=True)
             X = np.ascontiguousarray(X / np.maximum(norms, 1e-15), dtype=np.float64)

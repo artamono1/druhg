@@ -122,7 +122,9 @@ def test_plot_dendrogram(filename=None):
         plt.savefig(filename+'.png')
     assert _not_fail_all
 
-def test_plot_one_dimension(): # пока не работает, нельзя дерево посторить!?
+def test_plot_one_dimension(showplot=True, filename=None): # пока не работает, нельзя дерево посторить!?
+    if filename is None:
+        filename = test_plot_one_dimension.__name__
     iris = datasets.load_iris()
     XX = iris['data']
     XX = XX.flatten()
@@ -130,6 +132,14 @@ def test_plot_one_dimension(): # пока не работает, нельзя д
     dr = DRUHG(max_ranking=50)
     dr.fit(XX)
     dr.plot(dr.labels_)
+
+    if showplot and _plot_graph:
+        plt.close('all')
+        # print('dr.labels_', dr.labels_)
+        dr.plot(dr.labels_)
+        # dr.plot(dr.labels_)
+        plt.savefig(filename + 'plot' + '.png')
+
     assert _not_fail_all
 
 def test_2and3():

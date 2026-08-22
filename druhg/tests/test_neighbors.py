@@ -101,3 +101,25 @@ def test_sklearn_agreement_if_present():
         d0, _ = ours.query(X, k=k)
         d1, _ = theirs.query(X, k=k)
         np.testing.assert_allclose(d0, d1, rtol=1e-7, atol=1e-9)
+
+
+def test_one_dimensional_knn_and_druhg():
+    rng = np.random.RandomState(4)
+    x1 = np.ascontiguousarray(rng.randn(60))
+    x2 = x1.reshape(-1, 1)
+    k = 5
+    for Tree in (KDTree, BallTree):
+        t1 = Tree(x1, leaf_size=4, metric='euclidean')
+        t2 = Tree(x2, leaf_size=4, metric='euclidean')
+        assert t1.data.shape == (60, 1)
+        d1, _ = t1.query(x1, k=k)
+        d2, _ = t2.query(x2, k=k)
+        np.testing.assert_allclose(d1, d2, rtol=1e-9, atol=1e-12)
+        brute, _ = _brute_knn(x2, x2, k, 'euclidean')
+        np.testing.assert_allclose(d1, brute, rtol=1e-7, atol=1e-9)
+
+    from druhg import DRUHG
+    dr = DRUHG(max_ranking=12, verbose=False).fit(x1)
+    assert dr._raw_data.shape == (60, 1)
+    assert dr.num_edges_ == 59
+    assert dr.labels_.shape == (60,)

@@ -20,7 +20,7 @@ from sklearn.base import BaseEstimator, ClusterMixin
 from scipy.sparse import issparse
 from joblib.parallel import cpu_count
 
-from ._druhg_neighbors import KDTree, BallTree, KDTREE_VALID_METRICS, BALLTREE_VALID_METRICS
+from ._druhg_neighbors import KDTree, BallTree, KDTREE_VALID_METRICS, BALLTREE_VALID_METRICS, _as_sample_matrix
 
 from ._druhg_tree import UniversalReciprocity
 from ._druhg_label import Clusterizer
@@ -144,6 +144,15 @@ def _check_input(X, core_n_jobs, max_ranking, leaf_size, metric, p,
     return printout, core_n_jobs, max_ranking, limitL, limitH
 
 
+def _coerce_feature_array(X, algorithm, metric):
+    """Interpret a 1-d vector as n samples with one feature."""
+    if type(X) is list:
+        raise ValueError('X must be array! Not a list!')
+    if "precomputed" in str(algorithm).lower() or "precomputed" in str(metric).lower() or issparse(X):
+        return X
+    return _as_sample_matrix(X)
+
+
 def _tree_constructor_kwargs(metric, p, kwargs):
     tree_kwargs = {}
     metric_l = metric.lower()
@@ -245,10 +254,10 @@ def druhg(X, max_ranking=16,
 
     Parameters
     ----------
-    X : array matrix of shape (n_samples, n_features), or \
-            array of shape (n_samples, n_samples)
-        A feature array, or array of distances between samples if
-        ``metric='precomputed'``.
+    X : array matrix of shape (n_samples, n_features), \
+            (n_samples,), or (n_samples, n_samples)
+        A feature array (a 1-d vector is n samples with one feature), or
+        array of distances between samples if ``metric='precomputed'``.
 
     max_ranking : int, optional (default=15)
         The maximum number of neighbors to search.
@@ -332,15 +341,14 @@ def druhg(X, max_ranking=16,
     if printout:
         logger.info('Druhg is using defaults for: ' + printout)
 
-    if type(X) is list:
-        raise ValueError('X must be array! Not a list!')
+    X = _coerce_feature_array(X, algorithm, metric)
     if not ("precomputed" in algorithm.lower() or "precomputed" in metric.lower() or issparse(X)):
         if not X.flags['C_CONTIGUOUS']:
             logger.info('Converting data array to c-contiguous')
             X = np.array(X, dtype=np.float64, order='C')
-    if X.dtype != np.float64:
-        logger.info('Converting data array to numpy float64')
-        X = X.astype(np.float64)
+        if X.dtype != np.float64:
+            logger.info('Converting data array to numpy float64')
+            X = X.astype(np.float64)
 
     tree, algo_code = _tune_treealgo(X, metric, algorithm, leaf_size, p=p, **kwargs)
 
@@ -421,10 +429,10 @@ class DRUHG(BaseEstimator, ClusterMixin):
 
         Parameters
         ----------
-        X : array or sparse (CSR) matrix of shape (n_samples, n_features), or \
-                array of shape (n_samples, n_samples)
-            A feature array, or array of distances between samples if
-            ``metric='precomputed'``.
+        X : array or sparse (CSR) matrix of shape (n_samples, n_features), \
+                (n_samples,), or (n_samples, n_samples)
+            A feature array (a 1-d vector is n samples with one feature), or
+            array of distances between samples if ``metric='precomputed'``.
 
         Returns
         -------
@@ -434,6 +442,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         kwargs = self.get_params()
         kwargs.update(self._metric_kwargs)
 
+        X = _coerce_feature_array(X, self.algorithm, self.metric)
         self._size = X.shape[0]
         self._raw_data = X
 
@@ -450,10 +459,10 @@ class DRUHG(BaseEstimator, ClusterMixin):
 
         Parameters
         ----------
-        X : array or sparse (CSR) matrix of shape (n_samples, n_features), or \
-                array of shape (n_samples, n_samples)
-            A feature array, or array of distances between samples if
-            ``metric='precomputed'``.
+        X : array or sparse (CSR) matrix of shape (n_samples, n_features), \
+                (n_samples,), or (n_samples, n_samples)
+            A feature array (a 1-d vector is n samples with one feature), or
+            array of distances between samples if ``metric='precomputed'``.
 
         Returns
         -------
@@ -544,6 +553,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         return self
 
     def allocate_buffers(self, XX):
+        XX = _coerce_feature_array(XX, self.algorithm, self.metric)
         self._size = XX.shape[0]
         self._raw_data = XX
         self.buffers_ = _allocate_if_needed(self.buffers_, self._size, False, False)
