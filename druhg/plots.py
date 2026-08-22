@@ -6,7 +6,6 @@ import datetime
 import logging
 
 import numpy as np
-from math import pow
 
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
@@ -71,6 +70,12 @@ class ClusterTree(object):
         self.dis_slider = None
         self.qty_slider = None
         self._last_drawn = None
+        self._plot_timer = None
+        self._plot_busy = False
+        self._plot_pending = False
+        self.core_scat_ = None
+        self._edge_src = None
+        self._edge_dst = None
 
     def decrease_dimensions(self):
         raw = np.asarray(self._raw_data)
@@ -86,11 +91,8 @@ class ClusterTree(object):
         elif n_features == 2:
             projection = np.asarray(raw, dtype=np.float64).copy()
         else:
-            values = np.asarray(raw, dtype=np.float64).reshape(-1)
-            projection = np.column_stack((
-                np.arange(values.shape[0], dtype=np.float64),
-                values,
-            ))
+            values = np.asarray(raw, dtype=np.float64).reshape(-1, 1)
+            projection = np.pad(values, ((0, 0), (0, 1)))
 
         return projection
 
@@ -128,36 +130,43 @@ class ClusterTree(object):
         except ImportError:
             raise ImportError('You must install the matplotlib library to plot the minimum spanning tree.')
 
-        num_edges = self._num_edges
-        # start, end = pos[self._mst_pairs[num_edges//2]], pos[self._mst_pairs[num_edges//2 + 1]]
-        if self.quiver_ is None:
-            # line_width = min(1., ((start[0] - end[0]) ** 2 + (start[1] - end[1]) ** 2) ** 0.5) / 2.  # медианный размер
-            x, y, u, v = [], [], [], []
-            for i in range(0, num_edges):
-                a, b = self._mst_pairs[2*i], self._mst_pairs[2*i+1]
-                if a==b:
-                    break
-                start, end = pos[a], pos[b]
-                x.append(start[0])
-                y.append(start[1])
-                u.append(end[0] - start[0])
-                v.append(end[1] - start[1])
-            self.quiver_ = ax.quiver(x, y, u, v, angles='xy', scale_units='xy', scale = 1)
+        if self._edge_src is None:
+            num_edges = self._num_edges
+            pairs = np.asarray(self._mst_pairs)
+            a = np.asarray(pairs[0:2 * num_edges:2])
+            b = np.asarray(pairs[1:2 * num_edges:2])
+            same = a == b
+            if np.any(same):
+                n_valid = int(np.argmax(same))
+                a = a[:n_valid]
+                b = b[:n_valid]
+            self._edge_src = a
+            self._edge_dst = b
 
-        if self.quiver_colors_ is None:
-            self.quiver_colors_ = np.zeros(len(self._raw_data), (np.double, 4))
-        for i in range(0, num_edges):
-            a, b = self._mst_pairs[2*i], self._mst_pairs[2*i+1]
-            if a == b:
-                break
-            color = self._avg_color(node_colors[a], node_colors[b])
-            self.quiver_colors_[i][0] = color[0]
-            self.quiver_colors_[i][1] = color[1]
-            self.quiver_colors_[i][2] = color[2]
-            self.quiver_colors_[i][3] = color[3] * 0.75
-            if self._has_values_arr and self._values_arr[i] >= top_dis:
-                self.quiver_colors_[i][3] = 0.
-            self.quiver_.set_color(self.quiver_colors_)
+        a = self._edge_src
+        b = self._edge_dst
+        n_valid = a.shape[0]
+
+        if self.quiver_ is None:
+            start = pos[a]
+            end = pos[b]
+            self.quiver_ = ax.quiver(start[:, 0], start[:, 1],
+                                     end[:, 0] - start[:, 0], end[:, 1] - start[:, 1],
+                                     angles='xy', scale_units='xy', scale=1)
+
+        if n_valid == 0:
+            return
+
+        if self.quiver_colors_ is None or self.quiver_colors_.shape[0] < n_valid:
+            self.quiver_colors_ = np.zeros((n_valid, 4), np.double)
+
+        colors = self.quiver_colors_[:n_valid]
+        np.add(node_colors[a], node_colors[b], out=colors)
+        colors *= 0.5
+        colors[:, 3] *= 0.75
+        if self._has_values_arr and n_valid:
+            colors[np.asarray(self._values_arr[:n_valid]) >= top_dis, 3] = 0.
+        self.quiver_.set_color(colors)
 
     def convert_labels_to_colors(self, palette, base_node_alpha):
         different_colors = len(palette)
@@ -232,53 +241,97 @@ class ClusterTree(object):
                 slider_sizes_bg[i] = np.nan
         return slider_sizes_bg
 
+    def _clusters_for_all_points(self, top_dis, range_size):
+        n = len(self._raw_data)
+        offset = self._U.get_offset()
+        parent = np.asarray(self._U.parent)
+        sizes = np.asarray(self._sizes_arr)
+        clusters_arr = np.asarray(self._clusters_arr)
+        has_values = self._has_values_arr
+        values = np.asarray(self._values_arr) if has_values else None
+        lo, hi = range_size[0], range_size[1]
+
+        ret_index = np.full(n, -1, dtype=np.intp)
+        ret_depth = np.full(n, -1, dtype=np.intp)
+        ret_outlier = np.full(n, -1, dtype=np.intp)
+
+        cur_parent = np.array(parent[:n], copy=True)
+        walking = cur_parent != 0
+        while np.any(walking):
+            idx = np.flatnonzero(walking)
+            p = cur_parent[idx]
+            pc = p - offset
+            ret_depth[idx] += 1
+
+            stop = sizes[pc] > hi
+            if has_values:
+                stop |= top_dis < values[pc]
+            cont = ~stop
+            walking[idx] = False
+            if not np.any(cont):
+                continue
+
+            idx_c = idx[cont]
+            pc_c = pc[cont]
+            is_cluster = clusters_arr[pc_c] < 0
+            take = is_cluster & (sizes[pc_c] >= lo)
+            ret_index[idx_c[take]] = pc_c[take]
+            take_out = (~is_cluster) & (ret_index[idx_c] < 0)
+            ret_outlier[idx_c[take_out]] = pc_c[take_out]
+
+            next_p = parent[p[cont]]
+            cur_parent[idx_c] = next_p
+            walking[idx_c] = next_p != 0
+
+        return ret_index, ret_depth, ret_outlier
+
     def dynamic_labeling_and_coloring(self, top_dis, range_size):
         # Цвет кластера определяется лейблом самой глубокой ноды, тогда при соединении будет эффект поглощения
         # альфа точки равна 1 для самой глубокой ноды, последние выбросы будут самыми прозрачными
         min_node_alpha = 0.5
         max_node_alpha = 1.
         plus_core_alpha = 0.25
+        alpha_span = max_node_alpha - min_node_alpha
 
-        num_points = len(self._raw_data)
-        for i in range(0, num_points):
-            pc, point_depth, outlier_pc = self.get_cluster(i, top_dis, range_size)
-            if pc > 0:
-                color = self.clusters_pallete_[pc]
-                cluster_depth = self.clusters_depth_[pc]
-                ## scaling
-                coef = min_node_alpha + pow(point_depth,2) * (max_node_alpha - min_node_alpha)/(1 + pow(cluster_depth,2))
-                self.node_colors_[i][0] = max(0, min(1.0, 1. - coef*(1. - color[0])))
-                self.node_colors_[i][1] = max(0, min(1.0, 1. - coef*(1. - color[1])))
-                self.node_colors_[i][2] = max(0, min(1.0, 1. - coef*(1. - color[2])))
-                self.node_colors_[i][3] = color[3]
+        ret_index, ret_depth, ret_outlier = self._clusters_for_all_points(top_dis, range_size)
+        cc = self.node_colors_
+        pal = self.clusters_pallete_
+        depths = self.clusters_depth_
 
-                if self.core_color is not None:
-                    color = self.core_color
-                    coef += plus_core_alpha
-                    self.core_colors_[i][0] = max(0, min(1.0, 1. - coef*(1. - color[0])))
-                    self.core_colors_[i][1] = max(0, min(1.0, 1. - coef*(1. - color[1])))
-                    self.core_colors_[i][2] = max(0, min(1.0, 1. - coef*(1. - color[2])))
-                    self.core_colors_[i][3] = color[3]
-                # print(self.node_colors_[i], coef, cluster_depth, point_depth)
-                # num_clusters += 1
-            else:
-                color = self.outlier_color_
-                ## mixing with white
-                coef = 1. if outlier_pc < 0 else \
-                        min_node_alpha + pow(point_depth,2) * (max_node_alpha - min_node_alpha)/(1 + pow(self.clusters_depth_[outlier_pc],2))
+        clustered = np.flatnonzero(ret_index > 0)
+        if clustered.size:
+            pc = ret_index[clustered]
+            color = pal[pc]
+            cluster_depth = depths[pc].astype(np.double, copy=False)
+            point_depth = ret_depth[clustered].astype(np.double, copy=False)
+            coef = min_node_alpha + (point_depth * point_depth) * alpha_span / (1. + cluster_depth * cluster_depth)
+            coef3 = coef[:, None]
+            cc[clustered, :3] = np.clip(1. - coef3 * (1. - color[:, :3]), 0., 1.)
+            cc[clustered, 3] = color[:, 3]
+            if self.core_color is not None:
+                core = np.asarray(self.core_color, dtype=np.double)
+                ccoef = coef + plus_core_alpha
+                self.core_colors_[clustered, :3] = np.clip(1. - ccoef[:, None] * (1. - core[:3]), 0., 1.)
+                self.core_colors_[clustered, 3] = core[3]
 
-                self.node_colors_[i][0] = max(0, min(1.0, coef*color[0] + 1 - coef))
-                self.node_colors_[i][1] = max(0, min(1.0, coef*color[1] + 1 - coef))
-                self.node_colors_[i][2] = max(0, min(1.0, coef*color[2] + 1 - coef))
-                self.node_colors_[i][3] = color[3]
-
-                if self.core_color is not None:
-                    color = self.core_color
-                    coef += plus_core_alpha
-                    self.core_colors_[i][0] = max(0, min(1.0, coef*color[0] + 1 - coef))
-                    self.core_colors_[i][1] = max(0, min(1.0, coef*color[1] + 1 - coef))
-                    self.core_colors_[i][2] = max(0, min(1.0, coef*color[2] + 1 - coef))
-                    self.core_colors_[i][3] = color[3]
+        outliers = np.flatnonzero(ret_index <= 0)
+        if outliers.size:
+            color = np.asarray(self.outlier_color_, dtype=np.double)
+            out_pc = ret_outlier[outliers]
+            coef = np.ones(outliers.size, dtype=np.double)
+            has_out = out_pc >= 0
+            if np.any(has_out):
+                cd = depths[out_pc[has_out]].astype(np.double, copy=False)
+                pd = ret_depth[outliers][has_out].astype(np.double, copy=False)
+                coef[has_out] = min_node_alpha + (pd * pd) * alpha_span / (1. + cd * cd)
+            coef3 = coef[:, None]
+            cc[outliers, :3] = np.clip(coef3 * color[:3] + 1. - coef3, 0., 1.)
+            cc[outliers, 3] = color[3]
+            if self.core_color is not None:
+                core = np.asarray(self.core_color, dtype=np.double)
+                ccoef = coef + plus_core_alpha
+                self.core_colors_[outliers, :3] = np.clip(ccoef[:, None] * core[:3] + 1. - ccoef[:, None], 0., 1.)
+                self.core_colors_[outliers, 3] = core[3]
 
         return self.node_colors_, self.core_colors_
 
@@ -354,48 +407,104 @@ class ClusterTree(object):
             self.qty_slider.set_val([v1, v2-1])
 
     def _apply(self, event):
+        if self._plot_timer is not None:
+            self._plot_timer.stop()
+        self._plot_pending = False
         axbtn = self.axs[1, 1]
         axbtn.set_visible(False)
         self.update_plot(None)
         self.fig.canvas.draw_idle()
         self.fig.canvas.flush_events()
 
+    def _live_plot_enabled(self):
+        return self.btn_apply is None or not self.axs[1, 1].get_visible()
+
+    def _redraw_axes(self, *axes):
+        """Redraw slider axes without touching the main scatter plot."""
+        canvas = getattr(self.fig, 'canvas', None)
+        if canvas is None:
+            return
+        if not getattr(canvas, 'supports_blit', False):
+            canvas.draw_idle()
+            return
+        try:
+            renderer = canvas.get_renderer()
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            canvas.draw_idle()
+            return
+        if renderer is None:
+            canvas.draw_idle()
+            return
+        try:
+            for ax in axes:
+                if ax is None:
+                    continue
+                ax.draw(renderer)
+                canvas.blit(ax.bbox)
+        except (AttributeError, RuntimeError, ValueError, TypeError):
+            canvas.draw_idle()
+
+    def _flush_plot_update(self):
+        if not self._live_plot_enabled():
+            return
+        self._plot_busy = True
+        try:
+            self.update_plot(True)
+            if self.fig is not None:
+                self.fig.canvas.draw_idle()
+        finally:
+            self._plot_busy = False
+
+    def _on_slider_idle(self, *args):
+        if self._plot_busy:
+            self._plot_pending = True
+            return
+        self._plot_pending = False
+        self._flush_plot_update()
+        if self._plot_pending:
+            self._plot_pending = False
+            if self._plot_timer is not None:
+                self._plot_timer.start()
+
+    def _on_slider_release(self, event):
+        if self.fig is None or event.inaxes not in (self.axs[0, 1], self.axs[1, 0]):
+            return
+        if self._plot_timer is not None:
+            self._plot_timer.stop()
+        self._on_slider_idle()
+
+    def _request_plot_update(self):
+        """Coalesce slider-driven redraws so dragging stays interactive."""
+        if not self._live_plot_enabled():
+            return
+        if self._plot_timer is None:
+            self._flush_plot_update()
+            return
+        self._plot_timer.stop()
+        self._plot_timer.start()
 
     def update_qty_slider(self, val):
-
         num_points = len(self._raw_data)
         self.qty_slider.poly.set_xy([[0, 0], [1, 0],
                                [1, self.qty_slider.val[0]], [0, self.qty_slider.val[0]],
                                [0, self.qty_slider.val[1]], [1, self.qty_slider.val[1]],
                                [1, num_points], [0, num_points]])
-
-        axbtn = self.axs[1, 1]
-        if val is not None and self.btn_apply is not None and not axbtn.get_visible():
-            self.update_plot(val)
-
-        self.fig.canvas.draw_idle()
-        self.fig.canvas.flush_events()
+        if val is None:
+            return
+        self._redraw_axes(self.axs[0, 1])
+        self._request_plot_update()
 
     def update_dis_slider(self, val):
-
-        # if val is not None and val==self.dis_slider.poly.get:
-        #     # against dragging right or left
-        #     return
-
-        axbtn = self.axs[1, 1]
         num_points = len(self._raw_data)
 
         dis = self._values_arr[int(self.dis_slider.val)]
         self.dis_slider.valtext.set_text("{:.4f}".format(dis))
-        # dis_slider.poly.set_xy([[dis_slider.val, 0.], [dis_slider.val, 2.], [num_points, 2.], [num_points, 0.]])
         self.dis_slider.poly.set(xy=[self.dis_slider.val, 0.], height=2., width=(num_points - self.dis_slider.val + 1))
 
-        if val is not None and self.btn_apply is not None and not axbtn.get_visible():
-            self.update_plot(val)
-        if self.btn_apply is None or not axbtn.get_visible():
-            self.fig.canvas.draw_idle()
-
-        self.fig.canvas.flush_events()
+        if val is None:
+            return
+        self._redraw_axes(self.axs[1, 0])
+        self._request_plot_update()
 
     def update_plot(self, val):
         # axis.cla()
@@ -405,13 +514,21 @@ class ClusterTree(object):
 
         if self.dis_slider is None:
             dis = np.inf
+            dis_key = None
         else:
-            dis = self._values_arr[int(self.dis_slider.val)] * 1.0001
+            dis_key = int(self.dis_slider.val)
+            dis = self._values_arr[dis_key] * 1.0001
 
         if self.qty_slider is None:
             range_ = [0, np.inf]
+            qty_key = None
         else:
             range_ = self.qty_slider.val
+            qty_key = (int(range_[0]), int(range_[1]))
+
+        draw_key = (dis_key, qty_key, self._static_labels is not None)
+        if draw_key == self._last_drawn and self.scat_ is not None:
+            return
 
         if self._static_labels is None:
             cc, core_cc = self.dynamic_labeling_and_coloring(dis, range_)
@@ -441,9 +558,13 @@ class ClusterTree(object):
 
             if self.core_color is not None:
                 # adding (red)dots at the node centers
-                axmain.scatter(self.pos.T[0], self.pos.T[1], c=core_cc, marker='.', s=self.node_size / 10)
+                self.core_scat_ = axmain.scatter(self.pos.T[0], self.pos.T[1], c=core_cc, marker='.', s=self.node_size / 10)
         else:
             self.scat_.set_color(cc)
+            if self.core_scat_ is not None and core_cc is not None:
+                self.core_scat_.set_color(core_cc)
+
+        self._last_drawn = draw_key
 
         td = datetime.datetime.now() - now
         if self._static_labels is None:
@@ -622,8 +743,20 @@ class ClusterTree(object):
         self.qty_slider.drawon = False
         self.dis_slider.drawon = False
 
+        self._plot_busy = False
+        self._plot_pending = False
+        self._plot_timer = None
+        try:
+            timer = self.fig.canvas.new_timer(interval=40)
+            timer.single_shot = True
+            timer.add_callback(self._on_slider_idle)
+            self._plot_timer = timer
+        except (AttributeError, RuntimeError, TypeError, ValueError):
+            self._plot_timer = None
+
         cid = self.fig.canvas.mpl_connect('key_press_event', self.on_key_press)
         self._key_cid = cid
+        self._release_cid = self.fig.canvas.mpl_connect('button_release_event', self._on_slider_release)
 
         # init
         self.update_dis_slider(None)
