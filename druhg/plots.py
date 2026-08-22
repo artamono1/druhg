@@ -91,11 +91,8 @@ class ClusterTree(object):
         elif n_features == 2:
             projection = np.asarray(raw, dtype=np.float64).copy()
         else:
-            values = np.asarray(raw, dtype=np.float64).reshape(-1)
-            projection = np.column_stack((
-                np.arange(values.shape[0], dtype=np.float64),
-                values,
-            ))
+            values = np.asarray(raw, dtype=np.float64).reshape(-1, 1)
+            projection = np.pad(values, ((0, 0), (0, 1)))
 
         return projection
 
