@@ -21,7 +21,6 @@ from ._druhg_unionfind cimport UnionFind
 
 import _heapq as heapq
 
-from joblib import Parallel, delayed
 import bisect
 
 cdef np.double_t INF = sys.float_info.max
@@ -389,33 +388,12 @@ cdef class UniversalReciprocity (object):
 
             list heap
 
-        if self.tree.data.shape[0] > 16384 and self.n_jobs > 1: # multicore 2-3x speed up for big datasets
-        # if self.n_jobs > 1:
-            split_cnt = self.num_points // self.n_jobs
-            datasets = []
-            for i in range(self.n_jobs):
-                if i == self.n_jobs - 1:
-                    datasets.append(np.asarray(self.tree.data[i*split_cnt:]))
-                else:
-                    datasets.append(np.asarray(self.tree.data[i*split_cnt:(i+1)*split_cnt]))
-
-            knn_data = Parallel(n_jobs=self.n_jobs, prefer='threads')(
-                delayed(self.tree.query)
-                (points,
-                 self.max_neighbors_search,
-                 dualtree=True,
-                 breadth_first=True
-                 )
-                for points in datasets)
-            knn_dist = np.vstack([x[0] for x in knn_data])
-            knn_indices = np.vstack([x[1] for x in knn_data])
-        else:
-            knn_dist, knn_indices = self.dist_tree.query(
-                        self.tree.data,
-                        k=self.max_neighbors_search,
-                        dualtree=True,
-                        breadth_first=True,
-                        )
+        knn_dist, knn_indices = self.dist_tree.query(
+                    self.tree.data,
+                    k=self.max_neighbors_search,
+                    dualtree=True,
+                    breadth_first=True,
+                    )
         heap = []
 #### Initialization and pure reciprocity (ranks equal)
         warn, infinitesimal = 0, 0

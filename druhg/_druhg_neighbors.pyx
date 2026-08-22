@@ -6,7 +6,7 @@
 # cython: cdivision=True
 
 # KD-tree and Ball-tree k-nearest neighbor queries for DRUHG.
-# Author: Pavel Artamonov
+# Author: AI generated
 # License: 3-clause BSD
 
 from libc.math cimport fabs, sqrt, pow, fmax, fmin, sin, cos, asin, acos, log2
@@ -708,8 +708,8 @@ cdef class NeighborTree:
     cdef void _query_depthfirst(self, np.intp_t i_node, const np.float64_t* pt,
                                 np.intp_t i_pt, np.float64_t[:, ::1] dist,
                                 np.intp_t[:, ::1] ind,
-                                np.float64_t reduced_lb,
-                                np.intp_t skip_idx) noexcept nogil:
+                                np.float64_t reduced_lb
+                                ) noexcept nogil:
         cdef np.intp_t i, i1, i2, idx
         cdef np.float64_t d, lb1, lb2
         cdef const np.float64_t* data = &self.data_m[0, 0]
@@ -723,7 +723,7 @@ cdef class NeighborTree:
         if self.is_leaf[i_node]:
             for i in range(self.idx_start[i_node], self.idx_end[i_node]):
                 idx = self.idx_array[i]
-                if idx == skip_idx:
+                if idx == i_pt:
                     continue
                 d = _rdist(pt, data + idx * self.n_features, self.n_features,
                            self.metric_id, self.p, w, V, VI)
@@ -736,34 +736,28 @@ cdef class NeighborTree:
         lb1 = self._min_rdist(i1, pt)
         lb2 = self._min_rdist(i2, pt)
         if lb1 <= lb2:
-            self._query_depthfirst(i1, pt, i_pt, dist, ind, lb1, skip_idx)
-            self._query_depthfirst(i2, pt, i_pt, dist, ind, lb2, skip_idx)
+            self._query_depthfirst(i1, pt, i_pt, dist, ind, lb1)
+            self._query_depthfirst(i2, pt, i_pt, dist, ind, lb2)
         else:
-            self._query_depthfirst(i2, pt, i_pt, dist, ind, lb2, skip_idx)
-            self._query_depthfirst(i1, pt, i_pt, dist, ind, lb1, skip_idx)
+            self._query_depthfirst(i2, pt, i_pt, dist, ind, lb2)
+            self._query_depthfirst(i1, pt, i_pt, dist, ind, lb1)
 
     def query(self, X, k=1, return_distance=True, dualtree=False, breadth_first=False,
               sort_results=True):
         """Return k nearest neighbors for each row in X, excluding the point itself.
 
-        When a query row is a training sample (same buffer as ``data``), that
-        sample is omitted. ``dualtree`` and ``breadth_first`` are accepted for
-        API compatibility; queries use a single-tree depth-first search.
+        Training sample ``i`` is omitted from the neighbors of query row ``i``.
+        ``dualtree`` and ``breadth_first`` are accepted for API compatibility;
+        queries use a single-tree depth-first search.
         """
-        cdef np.intp_t n_queries, i, j, k_nbrs, skip_idx, nfeat
+        cdef np.intp_t n_queries, i, j, k_nbrs
         cdef np.float64_t[:, ::1] Xarr
-        cdef np.float64_t[:, ::1] Xraw
-        cdef np.float64_t[:, ::1] data_m
         cdef np.float64_t[:, ::1] dist_m
         cdef np.intp_t[:, ::1] ind_m
         cdef np.ndarray dist_arr, ind_arr
         cdef const np.float64_t* pt
-        cdef const np.float64_t* qpt
-        cdef const np.float64_t* dbase
-        cdef const np.float64_t* dend
         cdef np.float64_t lb
         cdef bint do_sort = sort_results
-        cdef np.intp_t off
 
         X = _as_sample_matrix(X, n_features=self.n_features)
         if X.shape[1] != self.n_features:
@@ -773,14 +767,11 @@ cdef class NeighborTree:
         if k > self.n_samples - 1:
             raise ValueError('k must be less than the number of training points')
 
-        Xraw = X
         if self.angular_mode:
             norms = np.linalg.norm(X, axis=1, keepdims=True)
             X = np.ascontiguousarray(X / np.maximum(norms, 1e-15), dtype=np.float64)
         Xarr = X
-        data_m = np.asarray(self.data)
         n_queries = Xarr.shape[0]
-        nfeat = self.n_features
         k_nbrs = k
         dist_arr = np.full((n_queries, k_nbrs), INF, dtype=np.float64)
         ind_arr = np.zeros((n_queries, k_nbrs), dtype=np.intp)
@@ -788,18 +779,10 @@ cdef class NeighborTree:
         ind_m = ind_arr
 
         with nogil:
-            dbase = &data_m[0, 0]
-            dend = dbase + self.n_samples * nfeat
             for i in range(n_queries):
-                skip_idx = -1
-                qpt = &Xraw[i, 0]
-                if qpt >= dbase and qpt < dend:
-                    off = qpt - dbase
-                    if nfeat > 0 and off % nfeat == 0:
-                        skip_idx = off / nfeat
                 pt = &Xarr[i, 0]
                 lb = self._min_rdist(0, pt)
-                self._query_depthfirst(0, pt, i, dist_m, ind_m, lb, skip_idx)
+                self._query_depthfirst(0, pt, i, dist_m, ind_m, lb)
                 if do_sort:
                     _sort_row(&dist_m[i, 0], &ind_m[i, 0], k_nbrs)
                 for j in range(k_nbrs):
