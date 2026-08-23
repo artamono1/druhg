@@ -754,8 +754,11 @@ class DRUHG(BaseEstimator, ClusterMixin):
                 'leaf_font_size': 8.,
             }
             dendrogram_kwargs.update(kwargs)
-            if labels is not None and 'link_color_func' not in dendrogram_kwargs:
-                labels_arr = np.asarray(labels)
+            if 'link_color_func' not in dendrogram_kwargs and (labels is not None or self.buffers_[Buffer.LABELS.value] is not None):
+                if labels is not None:
+                    labels_arr = np.asarray(labels)
+                elif self.buffers_[Buffer.LABELS.value] is not None:
+                    labels_arr = np.asarray(self.buffers_[Buffer.LABELS.value])
                 if labels_arr.shape[0] != self._size:
                     raise ValueError(
                         'labels length %s != n_samples %s'

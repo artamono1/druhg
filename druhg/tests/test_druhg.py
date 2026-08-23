@@ -1141,7 +1141,7 @@ def test_chameleon(filename=None):
 
     if _plot_graph and _test_extra_visualisation:
         plt.close('all')
-        dr.hierarchy()
+        dr.hierarchy(plot=True)
         plt.savefig(filename +'plot'+ '.png')
 
     exc = dr.labels_[3024]
