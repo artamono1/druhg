@@ -106,22 +106,6 @@ def test_plot_mst():
     dr.plot(dr.labels_)
     assert _not_fail_all
 
-def test_plot_dendrogram(filename=None):
-    if not _test_extra_visualisation:
-        return
-    if filename is None:
-        filename = test_plot_dendrogram.__name__
-    iris = datasets.load_iris()
-    XX = iris['data']
-    dr = DRUHG(max_ranking=50, limitH=int(len(XX)/2), fix_outliers=1)  #, limitL=0, limitH=int(len(XX)/2), fix_outliers=1)
-    dr.fit(XX)
-    dr.hierarchy()
-    if _plot_graph:
-        plt.close('all')
-        dr.hierarchy()
-        plt.savefig(filename+'.png')
-    assert _not_fail_all
-
 def test_plot_one_dimension(showplot=True, filename=None): # пока не работает, нельзя дерево посторить!?
     if filename is None:
         filename = test_plot_one_dimension.__name__
@@ -1157,7 +1141,7 @@ def test_chameleon(filename=None):
 
     if _plot_graph and _test_extra_visualisation:
         plt.close('all')
-        dr.hierarchy()
+        dr.hierarchy(plot=True)
         plt.savefig(filename +'plot'+ '.png')
 
     exc = dr.labels_[3024]
