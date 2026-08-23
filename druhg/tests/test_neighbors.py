@@ -129,3 +129,91 @@ def test_one_dimensional_knn_and_druhg():
     assert dr._raw_data.shape == (60, 1)
     assert dr.num_edges_ == 59
     assert dr.labels_.shape == (60,)
+
+
+def _brute_skip_annulus(X, skip_radius, k, metric, **kwargs):
+    scipy_metric = 'cityblock' if metric == 'manhattan' else metric
+    D = cdist(X, X, metric=scipy_metric, **kwargs)
+    np.fill_diagonal(D, np.inf)
+    r = np.asarray(skip_radius, dtype=np.float64)
+    if r.ndim == 0:
+        r = np.full(len(X), float(r))
+    skipped = np.sum(D < r[:, None], axis=1).astype(np.intp)
+    D = np.where(D < r[:, None], np.inf, D)
+    idx = np.argpartition(D, kth=k - 1, axis=1)[:, :k]
+    dist = np.take_along_axis(D, idx, axis=1)
+    order = np.argsort(dist, axis=1)
+    dist = np.take_along_axis(dist, order, axis=1)
+    idx = np.take_along_axis(idx, order, axis=1)
+    return skipped, dist, idx
+
+
+@pytest.mark.parametrize('Tree', [KDTree, BallTree])
+@pytest.mark.parametrize('metric,kwargs', [
+    ('euclidean', {}),
+    ('manhattan', {}),
+    ('chebyshev', {}),
+    ('minkowski', {'p': 3}),
+    ('cosine', {}),
+])
+def test_skip_radius_matches_brute(Tree, metric, kwargs):
+    rng = np.random.RandomState(5)
+    X = np.ascontiguousarray(rng.randn(90, 3))
+    tree = Tree(X, leaf_size=6, metric=metric, **kwargs)
+    full_dist, _ = tree.query(X, k=8)
+    skip_radius = 0.5 * (full_dist[:, 3] + full_dist[:, 4])
+    n = 5
+    skipped, dist, ind = tree.query(X, k=n, skip_radius=skip_radius)
+    brute_y, brute_dist, _ = _brute_skip_annulus(X, skip_radius, n, metric, **kwargs)
+    np.testing.assert_array_equal(skipped, brute_y)
+    np.testing.assert_allclose(dist, brute_dist, rtol=1e-6, atol=1e-8)
+    assert not np.any(ind == np.arange(len(X))[:, None])
+    assert np.all(dist[:, 0] + 1e-12 >= skip_radius)
+
+
+def test_skip_radius_zero_matches_plain_query():
+    rng = np.random.RandomState(6)
+    X = np.ascontiguousarray(rng.randn(40, 2))
+    tree = KDTree(X, leaf_size=4, metric='euclidean')
+    d0, i0 = tree.query(X, k=6)
+    skipped, d1, i1 = tree.query(X, k=6, skip_radius=0.0)
+    np.testing.assert_array_equal(skipped, 0)
+    np.testing.assert_allclose(d0, d1)
+    np.testing.assert_array_equal(i0, i1)
+
+
+def test_skip_radius_scalar_and_return_indices_only():
+    rng = np.random.RandomState(7)
+    X = np.ascontiguousarray(rng.randn(50, 2))
+    tree = BallTree(X, leaf_size=5, metric='euclidean')
+    d_full, _ = tree.query(X, k=4)
+    r = float(np.median(d_full[:, 2]))
+    skipped, dist, ind = tree.query(X, k=3, skip_radius=r)
+    skipped2, ind2 = tree.query(X, k=3, skip_radius=r, return_distance=False)
+    brute_y, brute_dist, brute_ind = _brute_skip_annulus(X, r, 3, 'euclidean')
+    np.testing.assert_array_equal(skipped, brute_y)
+    np.testing.assert_array_equal(skipped2, brute_y)
+    np.testing.assert_array_equal(ind, ind2)
+    np.testing.assert_allclose(dist, brute_dist, rtol=1e-6, atol=1e-8)
+
+
+def test_skip_radius_on_knn_distance_is_open_ball():
+    rng = np.random.RandomState(8)
+    X = np.ascontiguousarray(rng.randn(70, 2))
+    tree = KDTree(X, leaf_size=5, metric='euclidean')
+    full_dist, full_ind = tree.query(X, k=10)
+    r = full_dist[:, 5]
+    skipped, dist, ind = tree.query(X, k=4, skip_radius=r)
+    np.testing.assert_array_equal(skipped, 5)
+    np.testing.assert_allclose(dist, full_dist[:, 5:9], rtol=1e-7, atol=1e-9)
+    np.testing.assert_array_equal(ind, full_ind[:, 5:9])
+
+
+def test_druhg_expands_knn_to_connect_far_blobs():
+    from druhg import DRUHG
+    rng = np.random.RandomState(9)
+    a = rng.randn(15, 2)
+    b = rng.randn(15, 2) + 50.0
+    X = np.ascontiguousarray(np.vstack((a, b)))
+    dr = DRUHG(max_ranking=2, verbose=False, do_edges=True).fit(X)
+    assert dr.num_edges_ == 29

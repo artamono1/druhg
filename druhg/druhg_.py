@@ -260,8 +260,9 @@ def druhg(X, max_ranking=16,
         array of distances between samples if ``metric='precomputed'``.
 
     max_ranking : int, optional (default=15)
-        The maximum number of neighbors to search.
-        Affects performance vs precision.
+        Neighbor-query batch size. The spanning tree starts with this many
+        nearest neighbors and fetches more on demand when the current lists
+        cannot connect the forest. Affects performance vs precision.
 
     do_labeling : bool (default=True)
         It returns labels, otherwise new data point.
@@ -698,7 +699,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         ``scipy.cluster.hierarchy.dendrogram``, ``fcluster``, or ``cophenet``.
         Distances follow DRUHG merge order and are not always monotonic.
 
-        If the spanning tree is a forest (low ``max_ranking``), remaining
+        If the spanning tree is a forest, remaining
         components are joined with distances slightly above the last real merge.
 
         Parameters
