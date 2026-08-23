@@ -425,11 +425,14 @@ def unionfind_to_linkage(parent, n, values, num_edges):
         Remaining forest components are joined with distances slightly above
         the last real merge so the matrix is a complete binary tree.
     """
+    logger = logging.getLogger(__package__)
     parent = np.asarray(parent)
     values = np.asarray(values, dtype=np.float64)
     offset = n + 1
     n_merges = n - 1
+    logger.info('Hierarchy: converting %s samples, %s edges', n, num_edges)
     if n < 2:
+        logger.info('Hierarchy: fewer than 2 samples, empty linkage')
         return np.empty((0, 4), dtype=np.float64)
     if num_edges < 0:
         num_edges = 0
@@ -471,8 +474,15 @@ def unionfind_to_linkage(parent, n, values, num_edges):
         Z[i, 1] = b
         Z[i, 2] = values[i]
         Z[i, 3] = size_a + size_b
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                'Hierarchy: merge %s [%s, %s] dist %s size %s',
+                i, a, b, values[i], Z[i, 3])
 
     if num_edges == n_merges:
+        logger.info(
+            'Hierarchy: linkage %s x 4, last dist %s',
+            n_merges, Z[-1, 2] if n_merges else 0)
         return Z
 
     comp_ids = []
@@ -493,6 +503,11 @@ def unionfind_to_linkage(parent, n, values, num_edges):
             max_d = 0.0
     gap = max_d * 0.05 if max_d > 0.0 else 1.0
 
+    n_components = len(comp_ids)
+    logger.info(
+        'Hierarchy: forest with %s components, joining %s dummy merges',
+        n_components, n_merges - num_edges)
+
     cur_id = comp_ids[0]
     cur_sz = comp_sizes[0]
     for t, i in enumerate(range(num_edges, n_merges)):
@@ -507,7 +522,14 @@ def unionfind_to_linkage(parent, n, values, num_edges):
         Z[i, 3] = cur_sz + other_sz
         cur_id = n + i
         cur_sz = int(Z[i, 3])
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                'Hierarchy: dummy merge %s [%s, %s] dist %s size %s',
+                i, a, b, Z[i, 2], Z[i, 3])
 
+    logger.info(
+        'Hierarchy: linkage %s x 4, last dist %s',
+        n_merges, Z[-1, 2] if n_merges else 0)
     return Z
 
 
@@ -703,9 +725,11 @@ class DRUHG(BaseEstimator, ClusterMixin):
         Z : ndarray, shape (n_samples - 1, 4)
             SciPy hierarchical clustering linkage matrix.
         """
+        logger = logging.getLogger(__package__)
         if self.buffers_ is None or self.buffers_[Buffer.UNIONFIND.value] is None:
             raise AttributeError('Call fit() before hierarchy().')
         if self._size < 2:
+            logger.info('Hierarchy: fewer than 2 samples, empty linkage')
             self.linkage_ = np.empty((0, 4), dtype=np.float64)
             return self.linkage_
 
@@ -736,9 +760,15 @@ class DRUHG(BaseEstimator, ClusterMixin):
                     raise ValueError(
                         'labels length %s != n_samples %s'
                         % (labels_arr.shape[0], self._size))
+                n_clusters = len(set(int(x) for x in labels_arr if x >= 0))
+                logger.info(
+                    'Hierarchy: coloring dendrogram by labels_ (%s clusters)',
+                    n_clusters)
                 dendrogram_kwargs['link_color_func'] = labels_to_link_color_func(
                     Z, labels_arr)
                 dendrogram_kwargs.setdefault('color_threshold', 0)
+            else:
+                logger.info('Hierarchy: plotting dendrogram')
             if axis is None:
                 plt.figure(figsize=(25, 10))
                 axis = plt.gca()

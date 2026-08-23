@@ -363,7 +363,7 @@ cdef class UniversalReciprocity (object):
 
             if self.logger_debug:
                 self.logger.debug('%s %s new best %s < %s', i,j, v, best)
-                self.logger.debug('r %s, %s (%s) d %s (%s, %s)', rank, orank, inter, dis, distances[orank], odistances[rank])
+                self.logger.debug('  r %s, %s (%s) d %s (%s, %s)', rank+1, orank+1, inter, dis, distances[orank], odistances[rank])
 
             best = v
             rel.endpoint = j
@@ -388,14 +388,18 @@ cdef class UniversalReciprocity (object):
 
             list heap
 
+        self.logger.info(f'kNN querying: %s', self.max_neighbors_search)
         knn_dist, knn_indices = self.dist_tree.query(
                     self.tree.data,
                     k=self.max_neighbors_search,
                     dualtree=True,
                     breadth_first=True,
                     )
+        self.logger.info('kNN querying: done')
+
         heap = []
 #### Initialization and pure reciprocity (ranks equal)
+        self.logger.info(f'MSTree formation: initializing nearest connections. Pure autoconnect.')
         warn, infinitesimal = 0, 0
 
         # if self.tree.data.shape[0] > 16384 and self.n_jobs > 1: # multicore 2-3x speed up for big datasets
@@ -405,7 +409,6 @@ cdef class UniversalReciprocity (object):
             if knn_dist[i][0] < 0.:
                 self.logger.error('Distances cannot be negative! Exiting. '+str(i)+' '+str(knn_dist[i][0]))
                 return
-
             if self._pure_reciprocity(i, knn_indices, knn_dist, &rel, &infinitesimal):
                 self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank - 1)
                 p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
@@ -435,8 +438,7 @@ cdef class UniversalReciprocity (object):
             self.logger.warning('Some distances('+str(infinitesimal)+') are smaller than self.PRECISION ('+str(self.PRECISION)+
                    ') level. Try decreasing double_precision parameter.')
 
-        self.logger.info(f'{self.result_edges:.0f} mutual edges {100.*self.result_edges/self.num_points:.2f}%')
-
+        self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with complex connections.')
         edge_cases = 0
 ############
         while self.result_edges < self.num_points - 1 and heap:
@@ -452,6 +454,9 @@ cdef class UniversalReciprocity (object):
             if self._evaluate_reciprocity(i, p, knn_indices, knn_dist, &rel):
                 heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
 ###############
+        self.logger.info(
+            'MSTree formation: %s edges %.2f%%. Done.',
+            self.result_edges, 100. * self.result_edges / self.num_points)
         if self.result_edges != self.num_points - 1:
             self.logger.info('%s not connected edges of %s. It is a forest. Try increasing max_neighbors(max_ranking) value %s for a better result.',
                 self.num_points - 1 - self.result_edges, self.num_points - 1, self.max_neighbors_search)
