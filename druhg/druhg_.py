@@ -107,7 +107,7 @@ def _resolve_size_range(size, size_range, limitL, limitH):
     return printout, limitL, limitH
 
 
-def _check_input(X, core_n_jobs, max_ranking, leaf_size, metric, p,
+def _check_input(X, core_n_jobs, max_ranking, step_expansion, leaf_size, metric, p,
                  size_range, limitL, limitH):
     printout = ''
     size = X.shape[0]
@@ -120,8 +120,16 @@ def _check_input(X, core_n_jobs, max_ranking, leaf_size, metric, p,
     if max_ranking is not None:
         if type(max_ranking) is not int:
             raise ValueError('Max ranking must be integer!')
-        if max_ranking < 0:
-            raise ValueError('Max ranking must be non-negative integer!')
+        if max_ranking < 1:
+            raise ValueError('Max ranking must be a positive integer!')
+
+    if step_expansion is None:
+        step_expansion = 16
+        printout += 'step_expansion is set to ' + str(step_expansion) + ', '
+    elif type(step_expansion) is not int:
+        raise ValueError('step_expansion must be integer!')
+    elif step_expansion < 1:
+        raise ValueError('step_expansion must be a positive integer!')
 
     if leaf_size < 1:
         raise ValueError('Leaf size must be greater than 0!')
@@ -133,15 +141,16 @@ def _check_input(X, core_n_jobs, max_ranking, leaf_size, metric, p,
             raise ValueError('Minkowski metric with negative p value is not defined!')
 
     if max_ranking is None:
-        max_ranking = 16
-        printout += 'max_ranking is set to ' + str(max_ranking) + ', '
+        max_ranking = size - 1
+    else:
+        max_ranking = min(size - 1, max_ranking)
 
-    max_ranking = min(size - 1, max_ranking)
+    step_expansion = min(size - 1, max_ranking, step_expansion)
 
     extra, limitL, limitH = _resolve_size_range(size, size_range, limitL, limitH)
     printout += extra
 
-    return printout, core_n_jobs, max_ranking, limitL, limitH
+    return printout, core_n_jobs, max_ranking, step_expansion, limitL, limitH
 
 
 def _coerce_feature_array(X, algorithm, metric):
@@ -239,7 +248,7 @@ def _parsing_setup():
     return args.loglevel
 
 
-def druhg(X, max_ranking=16,
+def druhg(X, max_ranking=None, step_expansion=16,
           do_labeling=True,
           size_range=None,
           limitL=None, limitH=None,
@@ -259,10 +268,15 @@ def druhg(X, max_ranking=16,
         A feature array (a 1-d vector is n samples with one feature), or
         array of distances between samples if ``metric='precomputed'``.
 
-    max_ranking : int, optional (default=15)
+    max_ranking : int, optional (default=None)
+        Hard cap on how many nearest neighbors are stored per point.
+        ``None`` allows up to ``n - 1``. The spanning tree may be a forest
+        if this cap is too small to connect all points.
+
+    step_expansion : int, optional (default=16)
         Neighbor-query batch size. The spanning tree starts with this many
-        nearest neighbors and fetches more on demand when the current lists
-        cannot connect the forest. Affects performance vs precision.
+        nearest neighbors and fetches another batch on demand (via
+        ``skip_radius``) until ``max_ranking`` is reached.
 
     do_labeling : bool (default=True)
         It returns labels, otherwise new data point.
@@ -337,8 +351,8 @@ def druhg(X, max_ranking=16,
     elif str(verbose).lower() == 'debug':
         logger.setLevel(logging.DEBUG)
 
-    printout, core_n_jobs, max_ranking, limitL, limitH = _check_input(
-        X, core_n_jobs, max_ranking, leaf_size, metric, p, size_range, limitL, limitH)
+    printout, core_n_jobs, max_ranking, step_expansion, limitL, limitH = _check_input(
+        X, core_n_jobs, max_ranking, step_expansion, leaf_size, metric, p, size_range, limitL, limitH)
     if printout:
         logger.info('Druhg is using defaults for: ' + printout)
 
@@ -362,7 +376,8 @@ def druhg(X, max_ranking=16,
     ur = UniversalReciprocity(algo_code, tree,
                               buffers[Buffer.UNIONFIND.value], buffers[Buffer.UNIONFIND_FAST.value],
                               buffers[Buffer.VALUES.value],
-                              max_neighbors_search=max_ranking, metric=metric,
+                              max_neighbors_search=max_ranking, step_expansion=step_expansion,
+                              metric=metric,
                               leaf_size=leaf_size // 3, n_jobs=core_n_jobs,
                               buffer_ranks=buffers[Buffer.RANKS.value],
                               buffer_edgepairs=buffers[Buffer.MST.value],
@@ -603,7 +618,8 @@ def labels_to_link_color_func(Z, labels, palette=None, mixed_color='#BFBFBF'):
 class DRUHG(BaseEstimator, ClusterMixin):
     def __init__(self, metric='euclidean',
                  algorithm='best',
-                 max_ranking=24,
+                 max_ranking=None,
+                 step_expansion=16,
                  limitL=None,
                  limitH=None,
                  exclude=None,
@@ -613,6 +629,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
                  core_n_jobs=None,
                  **kwargs):
         self.max_ranking = max_ranking
+        self.step_expansion = step_expansion
         self.limitL = limitL
         self.limitH = limitH
         self.exclude = exclude

@@ -215,5 +215,7 @@ def test_druhg_expands_knn_to_connect_far_blobs():
     a = rng.randn(15, 2)
     b = rng.randn(15, 2) + 50.0
     X = np.ascontiguousarray(np.vstack((a, b)))
-    dr = DRUHG(max_ranking=2, verbose=False, do_edges=True).fit(X)
+    dr = DRUHG(max_ranking=None, step_expansion=2, verbose=False, do_edges=True).fit(X)
     assert dr.num_edges_ == 29
+    capped = DRUHG(max_ranking=2, step_expansion=2, verbose=False, do_edges=True).fit(X)
+    assert capped.num_edges_ < 29

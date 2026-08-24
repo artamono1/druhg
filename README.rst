@@ -17,7 +17,8 @@ Optional knobs:
 
 - ``size_range`` — filter cluster size; use ``[1, 1]`` for genuine outliers.
 - ``fix_outliers`` — assign outliers to their closest clusters along MST edges.
-- ``max_ranking`` — neighbor-search depth; trade speed for precision.
+- ``max_ranking`` — hard cap on neighbors per point (``None`` is ``n - 1``).
+- ``step_expansion`` — neighbor-query batch size; more are fetched on demand up to ``max_ranking``.
 
 -------------
 Basic Concept
@@ -29,7 +30,7 @@ Point A inspects the surroundings of point B and converts that view into its own
 
 This orders outliers last and equal densities first. It is a strong EDA (exploratory data analysis) method, a replacement for (H)DBSCAN, and a global-outlier detector.
 
-Evaluating all ``O(n²)`` pairs is unnecessary; only a small number of nearest neighbors matters. Control speed vs precision with ``max_ranking`` — after some ``k`` the result converges.
+Evaluating all ``O(n²)`` pairs is unnecessary; only a small number of nearest neighbors matters. ``step_expansion`` is the query batch size; ``max_ranking`` caps how far that search may grow. After some ``k`` the result converges.
 
 **The cluster.** The coloring formula is easiest to see through graphs and the nature of mathematical objects. Points *are*, edges *connect*, and **the dictionary of key–value pairs** (point-to-edge) "*colors*". When two graphs connect, the two sets of points can be linked to the connecting edge:
 
@@ -104,7 +105,7 @@ Or open interactive sliders for exploration:
 Performance
 -----------
 
-It can be slow on highly structured data. Lower ``max_ranking`` for better performance.
+It can be slow on highly structured data. Lower ``max_ranking`` or ``step_expansion`` for better performance.
 
 .. image:: https://raw.githubusercontent.com/artamono1/druhg/master/docs/source/pics/comparison_ver.png
     :width: 300px

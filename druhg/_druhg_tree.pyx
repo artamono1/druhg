@@ -172,10 +172,13 @@ cdef class UniversalReciprocity (object):
     data: object
         Pass KDTree/BallTree objects or pairwise matrix.
 
-    max_neighbors_search : int, optional (default= 16)
-        Neighbor-query batch size. The spanning tree starts with this many
-        neighbors per point and fetches another batch on demand (via
-        ``skip_radius``) when the current lists cannot connect the forest.
+    max_neighbors_search : int, optional (default= n-1)
+        Hard cap on stored neighbors per point (``max_ranking``).
+
+    step_expansion : int, optional (default= 16)
+        Neighbor-query batch size. Starts with this many neighbors per point
+        and fetches another batch on demand (via ``skip_radius``) while
+        under ``max_neighbors_search``.
 
     metric : string, optional (default='euclidean')
         The metric used to compute distances for the tree.
@@ -199,6 +202,7 @@ cdef class UniversalReciprocity (object):
         np.intp_t num_features
 
         np.intp_t max_neighbors_search
+        np.intp_t step_expansion
         np.intp_t knn_cap
 
         np.intp_t n_jobs
@@ -221,7 +225,7 @@ cdef class UniversalReciprocity (object):
 
     def __init__(self, algorithm, tree,
                  buffer_uf, buffer_fast, buffer_values,
-                 max_neighbors_search=16, metric='euclidean', leaf_size=20, n_jobs=4,
+                 max_neighbors_search=None, step_expansion=16, metric='euclidean', leaf_size=16, n_jobs=4,
                  buffer_ranks=None, buffer_edgepairs=None,
                  buffer_clusters=None,
                  **kwargs):
@@ -251,7 +255,17 @@ cdef class UniversalReciprocity (object):
         else:
             raise ValueError('algorithm value '+str(algorithm)+' is not valid')
 
-        self.max_neighbors_search = max_neighbors_search
+        if max_neighbors_search is None:
+            self.max_neighbors_search = self.num_points
+        else:
+            self.max_neighbors_search = max_neighbors_search
+
+        if self.step_expansion is None:
+            self.step_expansion = self.num_points
+        else:
+            self.step_expansion = step_expansion
+        if self.step_expansion < 1:
+            self.step_expansion = 1
 
         self.U = UnionFind(self.num_points, buffer_uf, buffer_fast)
         self.U.nullify()
@@ -469,33 +483,40 @@ cdef class UniversalReciprocity (object):
             bint seen
 
         n = self.num_points
-        n_add = self.max_neighbors_search
-        if n_add < 1:
-            n_add = 1
-        if n_add > n - 1:
-            n_add = n - 1
+        n_add = self.step_expansion
 
         any_need = 0
         mx = 0
+        room_max = 0
         for i in range(n):
             if need[i]:
                 u = self.knn_used[i]
-                if u >= n - 1:
+                extra = self.max_neighbors_search - u
+                if extra > n - 1 - u:
+                    extra = n - 1 - u
+                if extra < 1:
                     need[i] = 0
                     continue
                 any_need += 1
                 if u > mx:
                     mx = u
+                if extra > room_max:
+                    room_max = extra
         if any_need == 0:
             return 0
+        if n_add > room_max:
+            n_add = room_max
 
         if mx + n_add > self.knn_cap:
             extra = mx + n_add - self.knn_cap
-            self.knn_dist = np.hstack((
-                self.knn_dist, np.full((n, extra), INF, dtype=np.double)))
-            self.knn_indices = np.hstack((
-                self.knn_indices, np.zeros((n, extra), dtype=np.intp)))
-            self.knn_cap += extra
+            if self.knn_cap + extra > self.max_neighbors_search:
+                extra = self.max_neighbors_search - self.knn_cap
+            if extra > 0:
+                self.knn_dist = np.hstack((
+                    self.knn_dist, np.full((n, extra), INF, dtype=np.double)))
+                self.knn_indices = np.hstack((
+                    self.knn_indices, np.zeros((n, extra), dtype=np.intp)))
+                self.knn_cap += extra
 
         skip = np.full(n, np.inf, dtype=np.double)
         for i in range(n):
@@ -525,7 +546,7 @@ cdef class UniversalReciprocity (object):
                         break
                 if seen:
                     continue
-                if pos >= n - 1:
+                if pos >= self.max_neighbors_search or pos >= n - 1:
                     break
                 self.knn_dist[i, pos] = d
                 self.knn_indices[i, pos] = j
@@ -550,9 +571,11 @@ cdef class UniversalReciprocity (object):
             list heap
             np.ndarray[np.uint8_t, ndim=1] need
 
-        k0 = self.max_neighbors_search
+        k0 = self.step_expansion
         if k0 < 1:
             k0 = 1
+        if k0 > self.max_neighbors_search:
+            k0 = self.max_neighbors_search
         if k0 > self.num_points - 1:
             k0 = self.num_points - 1
         self.knn_cap = k0
@@ -630,7 +653,7 @@ cdef class UniversalReciprocity (object):
             need = np.zeros(self.num_points, dtype=np.uint8)
             grown = 0
             for i in range(self.num_points):
-                if self.knn_used[i] >= self.num_points - 1:
+                if self.knn_used[i] >= self.max_neighbors_search or self.knn_used[i] >= self.num_points - 1:
                     continue
                 p = self.U.mark_up(i)
                 if self._neighbors_all_connected(i, p):
@@ -650,8 +673,8 @@ cdef class UniversalReciprocity (object):
             'MSTree formation: %s edges %.2f%%. Done.',
             self.result_edges, 100. * self.result_edges / self.num_points)
         if self.result_edges != self.num_points - 1:
-            self.logger.info('%s not connected edges of %s. It is a forest. Try increasing max_neighbors(max_ranking) value %s for a better result.',
-                self.num_points - 1 - self.result_edges, self.num_points - 1, self.max_neighbors_search)
+            self.logger.info('%s not connected edges of %s. It is a forest. Try increasing max_ranking(%s) or step_expansion(%s).',
+                self.num_points - 1 - self.result_edges, self.num_points - 1, self.max_neighbors_search, self.step_expansion)
             if self.result_pairs_arr is not None:
                 self.result_pairs_arr[2 * self.result_edges] = -1
                 self.result_pairs_arr[2 * self.result_edges + 1] = -1
@@ -659,5 +682,5 @@ cdef class UniversalReciprocity (object):
 
         if self.max_neighbors_search < self.num_points - 1 and edge_cases != 0:
             # todo: may be check the actual reachability of indices?
-            self.logger.info('%s edges with the max rank. Try increasing max_neighbors(max_ranking) value %s or pick the square mode (not available yet).',
+            self.logger.info('%s edges with the max rank. Try increasing max_ranking(%s).',
                 edge_cases, self.max_neighbors_search)
