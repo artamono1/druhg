@@ -20,7 +20,7 @@ from sklearn.base import BaseEstimator, ClusterMixin
 from scipy.sparse import issparse
 from joblib.parallel import cpu_count
 
-from ._druhg_neighbors import KDTree, BallTree, KDTREE_VALID_METRICS, BALLTREE_VALID_METRICS, _as_sample_matrix
+from ._druhg_neighbors_skip import KDTree, BallTree, KDTREE_VALID_METRICS, BALLTREE_VALID_METRICS, _as_sample_matrix
 
 from ._druhg_tree import UniversalReciprocity
 from ._druhg_label import Clusterizer

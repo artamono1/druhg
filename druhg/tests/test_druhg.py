@@ -722,7 +722,7 @@ def test_two_moons():
     n_samples = 1500
     noisy_moons = datasets.make_moons(n_samples=n_samples, noise=.05)
     XX = noisy_moons[0]
-    dr = DRUHG(max_ranking=3, size_range=[1, 1], verbose=False, do_edges=True)
+    dr = DRUHG(max_ranking=5, size_range=[1, 1], verbose=False, do_edges=True)
     dr.fit(XX)
 
     plt.close('all')

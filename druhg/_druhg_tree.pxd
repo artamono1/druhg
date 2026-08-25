@@ -8,3 +8,4 @@ cdef struct Relation:
     np.double_t min_rank
     np.double_t max_rank
     np.intp_t rank_reached
+    np.intp_t is_full

@@ -209,6 +209,38 @@ def test_skip_radius_on_knn_distance_is_open_ball():
     np.testing.assert_array_equal(ind, full_ind[:, 5:9])
 
 
+def test_query_indices_matches_full_rows():
+    rng = np.random.RandomState(10)
+    X = np.ascontiguousarray(rng.randn(80, 3))
+    idx = np.array([3, 10, 21, 55, 70])
+    for Tree, metric in ((KDTree, 'euclidean'), (BallTree, 'manhattan')):
+        tree = Tree(X, leaf_size=6, metric=metric)
+        dist_all, ind_all = tree.query(X, k=5)
+        dist, ind = tree.query(X, k=5, indices=idx)
+        np.testing.assert_allclose(dist, dist_all[idx], rtol=1e-7, atol=1e-9)
+        np.testing.assert_array_equal(ind, ind_all[idx])
+        assert not np.any(ind == idx[:, None])
+        dist2, ind2 = tree.query(X[idx], k=5, indices=idx)
+        np.testing.assert_allclose(dist2, dist)
+        np.testing.assert_array_equal(ind2, ind)
+
+
+def test_query_indices_with_skip_radius():
+    rng = np.random.RandomState(11)
+    X = np.ascontiguousarray(rng.randn(60, 2))
+    tree = KDTree(X, leaf_size=5, metric='euclidean')
+    full_dist, full_ind = tree.query(X, k=8)
+    idx = np.array([1, 7, 22, 40])
+    r_full = full_dist[:, 3]
+    skipped, dist, ind = tree.query(X, k=3, skip_radius=r_full, indices=idx)
+    skipped2, dist2, ind2 = tree.query(X, k=3, skip_radius=r_full[idx], indices=idx)
+    np.testing.assert_array_equal(skipped, skipped2)
+    np.testing.assert_allclose(dist, dist2)
+    np.testing.assert_array_equal(ind, ind2)
+    np.testing.assert_allclose(dist, full_dist[idx][:, 3:6], rtol=1e-7, atol=1e-9)
+    np.testing.assert_array_equal(ind, full_ind[idx][:, 3:6])
+
+
 def test_druhg_expands_knn_to_connect_far_blobs():
     from druhg import DRUHG
     rng = np.random.RandomState(9)

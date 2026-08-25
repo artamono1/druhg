@@ -20,6 +20,7 @@ from ._druhg_unionfind import UnionFind
 from ._druhg_unionfind cimport UnionFind
 
 import _heapq as heapq
+import queue
 
 import bisect
 
@@ -40,40 +41,50 @@ cdef class PairwiseDistanceTreeSparse(object):
         self.data_size = N
         self.data_arr = d
 
-    cpdef tuple query(self, d, k, dualtree = 0, breadth_first = 0, skip_radius=None):
+    cpdef tuple query_init(self, d, k, dualtree = 0, breadth_first = 0, skip_radius=None, indices=None):
         # TODO: actually we need to consider replacing INF with something else.
         # Reciprocity of absent link is not the same as the INF. Do reciprocity with graphs!
         cdef np.ndarray[np.double_t, ndim=2] knn_dist
         cdef np.ndarray[np.intp_t, ndim=2] knn_indices
         cdef np.ndarray[np.intp_t, ndim=1] n_skipped
         cdef np.ndarray[np.double_t, ndim=1] skip_arr
+        cdef np.ndarray[np.intp_t, ndim=1] query_ids
         cdef np.double_t r_i, val
-        cdef np.intp_t i, j, pos, yi
+        cdef np.intp_t i, j, pos, yi, q, n_q
         cdef bint has_skip
 
-        knn_dist = INF*np.ones((self.data_size, k))
-        knn_indices = np.zeros((self.data_size, k), dtype=np.intp)
+        if indices is None:
+            query_ids = np.arange(self.data_size, dtype=np.intp)
+        else:
+            query_ids = np.ascontiguousarray(np.asarray(indices, dtype=np.intp).reshape(-1))
+        n_q = query_ids.shape[0]
+
+        knn_dist = INF*np.ones((n_q, k))
+        knn_indices = np.zeros((n_q, k), dtype=np.intp)
         has_skip = skip_radius is not None
         if has_skip:
             skip_arr = np.asarray(skip_radius, dtype=np.float64)
             if skip_arr.ndim == 0:
-                skip_arr = np.full(self.data_size, float(skip_arr), dtype=np.float64)
-            n_skipped = np.zeros(self.data_size, dtype=np.intp)
+                skip_arr = np.full(n_q, float(skip_arr), dtype=np.float64)
+            elif skip_arr.shape[0] == self.data_size and n_q != self.data_size:
+                skip_arr = skip_arr[query_ids]
+            n_skipped = np.zeros(n_q, dtype=np.intp)
         else:
             skip_arr = np.zeros(1, dtype=np.float64)
             n_skipped = np.zeros(1, dtype=np.intp)
 
         warning = 0
 
-        i = self.data_size
-        while i:
-            i -= 1
+        q = n_q
+        while q:
+            q -= 1
+            i = query_ids[q]
             row = self.data_arr.getrow(i)
             idx, data = row.indices, row.data
             sorted = np.argsort(data)
             pos = 0
             yi = 0
-            r_i = skip_arr[i] if has_skip else -1.0
+            r_i = skip_arr[q] if has_skip else -1.0
             for s in sorted:
                 j = idx[s]
                 if j == i:
@@ -87,11 +98,11 @@ cdef class PairwiseDistanceTreeSparse(object):
                     if not has_skip:
                         break
                     continue
-                knn_dist[i][pos] = val
-                knn_indices[i][pos] = j
+                knn_dist[q][pos] = val
+                knn_indices[q][pos] = j
                 pos += 1
             if has_skip:
-                n_skipped[i] = yi
+                n_skipped[q] = yi
 
         if warning:
             logging.getLogger(__package__).warning('Attention!: Sparse matrix has an edge that forms a loop! They were zeroed. '+str(warning))
@@ -108,35 +119,45 @@ cdef class PairwiseDistanceTreeGeneric(object):
         self.data_size = N
         self.data_arr = d
 
-    cpdef tuple query(self, d, k, dualtree = 0, breadth_first = 0, skip_radius=None):
+    cpdef tuple query_init(self, d, k, dualtree = 0, breadth_first = 0, skip_radius=None, indices=None):
         cdef np.ndarray[np.double_t, ndim=2] knn_dist
         cdef np.ndarray[np.intp_t, ndim=2] knn_indices
         cdef np.ndarray[np.intp_t, ndim=1] n_skipped
         cdef np.ndarray[np.double_t, ndim=1] skip_arr
+        cdef np.ndarray[np.intp_t, ndim=1] query_ids
         cdef np.double_t r_i, val
-        cdef np.intp_t i, j, pos, yi
+        cdef np.intp_t i, j, pos, yi, q, n_q
         cdef bint has_skip
 
-        knn_dist = INF*np.ones((self.data_size, k))
-        knn_indices = np.zeros((self.data_size, k), dtype=np.intp)
+        if indices is None:
+            query_ids = np.arange(self.data_size, dtype=np.intp)
+        else:
+            query_ids = np.ascontiguousarray(np.asarray(indices, dtype=np.intp).reshape(-1))
+        n_q = query_ids.shape[0]
+
+        knn_dist = INF*np.ones((n_q, k))
+        knn_indices = np.zeros((n_q, k), dtype=np.intp)
         has_skip = skip_radius is not None
         if has_skip:
             skip_arr = np.asarray(skip_radius, dtype=np.float64)
             if skip_arr.ndim == 0:
-                skip_arr = np.full(self.data_size, float(skip_arr), dtype=np.float64)
-            n_skipped = np.zeros(self.data_size, dtype=np.intp)
+                skip_arr = np.full(n_q, float(skip_arr), dtype=np.float64)
+            elif skip_arr.shape[0] == self.data_size and n_q != self.data_size:
+                skip_arr = skip_arr[query_ids]
+            n_skipped = np.zeros(n_q, dtype=np.intp)
         else:
             skip_arr = np.zeros(1, dtype=np.float64)
             n_skipped = np.zeros(1, dtype=np.intp)
 
-        i = self.data_size
-        while i:
-            i -= 1
+        q = n_q
+        while q:
+            q -= 1
+            i = query_ids[q]
             row = self.data_arr[i]
             sorted = np.argsort(row)
             pos = 0
             yi = 0
-            r_i = skip_arr[i] if has_skip else -1.0
+            r_i = skip_arr[q] if has_skip else -1.0
             for j in sorted:
                 if j == i:
                     continue
@@ -148,11 +169,11 @@ cdef class PairwiseDistanceTreeGeneric(object):
                     if not has_skip:
                         break
                     continue
-                knn_dist[i][pos] = val
-                knn_indices[i][pos] = j
+                knn_dist[q][pos] = val
+                knn_indices[q][pos] = j
                 pos += 1
             if has_skip:
-                n_skipped[i] = yi
+                n_skipped[q] = yi
 
         if has_skip:
             return n_skipped, knn_dist, knn_indices
@@ -212,7 +233,7 @@ cdef class UniversalReciprocity (object):
 
         np.ndarray knn_dist
         np.ndarray knn_indices
-        np.ndarray knn_used
+        np.ndarray knn_skip
         np.ndarray skip_radius
         object query_X
 
@@ -329,11 +350,11 @@ cdef class UniversalReciprocity (object):
         parent = self.U.mark_up(i)
         indices = self.knn_indices[i]
         distances = self.knn_dist[i]
-        used_i = self.knn_used[i]
+        arr_size = self.step_expansion
 
         rel.reciprocity = INF
         core_dis = distances[0]
-        for r in range(0, used_i):
+        for r in range(0, arr_size):
             j = indices[r]
             if parent == self.U.mark_up(j):
                 continue
@@ -345,27 +366,24 @@ cdef class UniversalReciprocity (object):
             if dis == 0.: # degenerate case.
                 rel.reciprocity = 0.
                 rel.endpoint = j
-                rel.max_rank = bisect.bisect(distances[:used_i], 0. + self.PRECISION) + 1
+                rel.max_rank = bisect.bisect(distances, 0. + self.PRECISION) + 1
                 return 1
             infinitesimal += dis <= self.PRECISION
 
             odistances = self.knn_dist[j]
-            used_j = self.knn_used[j]
             if odistances[0] + self.PRECISION < dis:
                 return 0
 
             rank = r + 1
-            while rank < used_i and distances[rank] <= dis + self.PRECISION:
+            while rank < arr_size and distances[rank] <= dis + self.PRECISION:
                 rank += 1
 
-            if rank > used_j:
-                continue
             odis = odistances[rank - 1]
             if odis >= dis + self.PRECISION:
                 continue
             if odis + self.PRECISION <= dis :
                 continue
-            if rank < used_j and odistances[rank] < dis + self.PRECISION:
+            if rank < arr_size and odistances[rank] < dis + self.PRECISION:
                 continue
 
             rel.reciprocity = dis
@@ -376,185 +394,148 @@ cdef class UniversalReciprocity (object):
 
     cdef bint _evaluate_reciprocity(self, np.intp_t i, np.intp_t parent, Relation* rel):
         cdef:
-            int rank, orank, r, inter
-            np.intp_t j, used_i, used_j, \
+            int rank, orank, r, inter,\
+                rr, rank_united, orank_united, \
+                is_united
+            np.intp_t j,  \
                 res = 0
 
-            np.double_t best, v, v1, v2, dis
+            np.double_t best, v, v1, v2, \
+                    d, ddis, oddis
 
             np.intp_t[:] indices
             np.intp_t[:] oindices
             np.double_t[:] distances
             np.double_t[:] odistances
 
-        used_i = self.knn_used[i]
+        rank_united = self.knn_skip[i]
         indices = self.knn_indices[i]
         distances = self.knn_dist[i]
+
+        arr_size = self.step_expansion
+
+        is_reachable = 0
+        is_united = 0
+        is_full = 1
 
         self.ball.clear()
         self.ball.add(i)
         best = INF
-        for r in range(0, used_i):
+        for r in range(0, arr_size):
 
-            dis = distances[r]
-            if dis >= INF / 2.:
+            d = distances[r]
+            if d == 0:
                 break
-            if dis - self.PRECISION > best: # v всегда >= dis по построению
+            if d - self.PRECISION > best: # v всегда >= dis по построению
                 break
 
             j = indices[r]
             self.ball.add(j)
             if self.U.is_same_parent(parent, j):
+                if is_united == 0:
+                    self.skip_radius[i] = d
                 continue
-            assert(dis > self.PRECISION)
+            assert(d > self.PRECISION)
 
-            used_j = self.knn_used[j]
-            odistances = self.knn_dist[j]
-            if r >= used_j or odistances[r] > dis + self.PRECISION: # outlier part has more information
+            is_full = 0
+            is_united = 1
+
+            rank = r + rank_united
+
+            orank_united = self.knn_skip[j]
+            if rank >= orank_united + arr_size + 1:
                 continue
 
-            rank = r + 1
-            while rank < used_i and distances[rank] <= dis + self.PRECISION:
-                self.ball.add(indices[rank])
+            rr = r + 1
+            while rr < arr_size and distances[rr] <= d + self.PRECISION: # equidistant case
+                self.ball.add(indices[rr])
+                rr += 1
                 rank += 1
 
-            if rank > used_j:
-                continue
-            if odistances[rank-1] > dis + self.PRECISION: # outlier part has more information
-                continue
-
+            odistances = self.knn_dist[j]
             oindices = self.knn_indices[j]
-            orank = 0
+
+            is_reachable = -1
+            orank = orank_united
             inter = 0
-            while orank < used_j and odistances[orank] <= dis + self.PRECISION:
-                inter += oindices[orank] != i and oindices[orank] in self.ball
+            rr = 0
+            while rr < arr_size and odistances[rr] <= d + self.PRECISION:
+                if oindices[rr] == i:
+                    is_reachable = 1
+                elif oindices[rr] in self.ball:
+                    inter += 1
+                rr += 1
                 orank += 1
 
-            if orank == 0:
-                continue
-            if rank > orank:
-                continue
-            if orank > used_i:
-                continue
+            ddis = d
+            oddis = d
+            if rank < orank:
+                rr = orank - 1 - rank_united
+                ddis = distances[rr] if rr>0 and rr < arr_size else d*2.
+            else:
+                rr = rank - 1 - orank_united
+                oddis = odistances[rr] if rr>0 and rr < arr_size else d*2.
 
-            if rank == orank and i < j:
-                continue
-
-            v1 = max(distances[orank - 1] + self.PRECISION,  dis * rank / (orank - inter)) # со своей стороны r<=oR
-            v2 = max(odistances[rank - 1] + self.PRECISION,  dis * orank / (rank - inter)) # с чужой стороны
+            v1 = max(ddis + self.PRECISION,  d * rank / (orank - inter)) # со своей стороны r<=oR
+            v2 = max(oddis + self.PRECISION,  d * orank / (rank - inter)) # с чужой стороны
             v = min(v1, v2)
 
             assert(v!=0)
-            assert(v+self.PRECISION>dis)
+            assert(v+self.PRECISION>d)
 
             if v >= best:
                 continue
 
             if self.logger_debug:
                 self.logger.debug('%s-%s new best %s < %s', i,j, v, best)
-                self.logger.debug('  r %s, %s (%s) d %s', rank+1, orank+1, inter, dis)
+                self.logger.debug('  r %s, %s (%s) d %s', rank+1, orank+1, inter, d)
 
             best = v
             rel.endpoint = j
-            rel.max_rank = orank
+            rel.max_rank = orank * is_reachable
 
             res = 1
         rel.reciprocity = best
+        rel.is_full = is_full
+
         return res
 
-    cdef bint _neighbors_all_connected(self, np.intp_t i, np.intp_t parent):
-        cdef np.intp_t r, used_i
-        used_i = self.knn_used[i]
-        for r in range(used_i):
-            if self.knn_dist[i, r] >= INF / 2.:
-                break
-            if not self.U.is_same_parent(parent, self.knn_indices[i, r]):
-                return 0
-        return 1
-
-    cdef np.intp_t _expand_knn(self, np.ndarray[np.uint8_t, ndim=1] need):
+    cdef np.intp_t _expand_knn(self, object need):
         cdef:
-            np.intp_t i, t, pos, n_add, j, n, any_need, mx, extra, added, u
+            np.intp_t i, t, pos, n_add, j, n, q, n_q, added, u
             np.double_t d
-            np.ndarray skip
+            np.ndarray idx
             np.ndarray n_skipped
             np.ndarray[np.double_t, ndim=2] new_dist
             np.ndarray[np.intp_t, ndim=2] new_ind
             bint seen
+            object need_arr
 
         n = self.num_points
         n_add = self.step_expansion
-
-        any_need = 0
-        mx = 0
-        room_max = 0
-        for i in range(n):
-            if need[i]:
-                u = self.knn_used[i]
-                extra = self.max_neighbors_search - u
-                if extra > n - 1 - u:
-                    extra = n - 1 - u
-                if extra < 1:
-                    need[i] = 0
-                    continue
-                any_need += 1
-                if u > mx:
-                    mx = u
-                if extra > room_max:
-                    room_max = extra
-        if any_need == 0:
+        need_arr = np.asarray(need)
+        if need_arr.ndim == 1 and need_arr.shape[0] == n and need_arr.dtype == np.uint8:
+            idx = np.flatnonzero(need_arr).astype(np.intp)
+        else:
+            idx = np.ascontiguousarray(need_arr, dtype=np.intp).ravel()
+        n_q = idx.shape[0]
+        if n_q == 0:
             return 0
-        if n_add > room_max:
-            n_add = room_max
-
-        if mx + n_add > self.knn_cap:
-            extra = mx + n_add - self.knn_cap
-            if self.knn_cap + extra > self.max_neighbors_search:
-                extra = self.max_neighbors_search - self.knn_cap
-            if extra > 0:
-                self.knn_dist = np.hstack((
-                    self.knn_dist, np.full((n, extra), INF, dtype=np.double)))
-                self.knn_indices = np.hstack((
-                    self.knn_indices, np.zeros((n, extra), dtype=np.intp)))
-                self.knn_cap += extra
-
-        skip = np.full(n, np.inf, dtype=np.double)
-        for i in range(n):
-            if need[i] and self.knn_used[i] > 0:
-                skip[i] = self.knn_dist[i, self.knn_used[i] - 1]
-                self.skip_radius[i] = skip[i]
 
         self.logger.info('kNN expand: %s points +%s neighbors, skip_radius from stored prefix',
-                         any_need, n_add)
-        n_skipped, new_dist, new_ind = self.dist_tree.query(
-            self.query_X, k=n_add, dualtree=True, breadth_first=True, skip_radius=skip)
+                         n_q, n_add)
+
+        n_skipped, new_dist, new_ind = self.dist_tree.query_skip(indices=idx, skip_radius=self.skip_radius, k=n_add)
 
         added = 0
-        for i in range(n):
-            if not need[i]:
-                continue
-            pos = self.knn_used[i]
+        for q in range(n_q):
+            i = idx[q]
+            self.knn_skip[i] = n_skipped[q]
+
             for t in range(n_add):
-                d = new_dist[i, t]
-                if not np.isfinite(d) or d >= INF / 2.:
-                    break
-                j = new_ind[i, t]
-                seen = 0
-                for u in range(pos):
-                    if self.knn_indices[i, u] == j:
-                        seen = 1
-                        break
-                if seen:
-                    continue
-                if pos >= self.max_neighbors_search or pos >= n - 1:
-                    break
-                self.knn_dist[i, pos] = d
-                self.knn_indices[i, pos] = j
-                pos += 1
-                added += 1
-            self.knn_used[i] = pos
-            if pos > 0:
-                self.skip_radius[i] = self.knn_dist[i, pos - 1]
+                self.knn_dist[i, t] = new_dist[q, t]
+                self.knn_indices[i, t] = new_ind[q, t]
+
         self.logger.info('kNN expand: done, +%s stored', added)
         return added
 
@@ -564,39 +545,29 @@ cdef class UniversalReciprocity (object):
         # uses heap
         cdef:
             np.intp_t i, \
-                warn, infinitesimal, k0, edge_cases, grown
+                warn, infinitesimal, pure_unreachable, edge_cases, grown
 
             Relation rel = Relation(0,0,0,0, 0,0)
 
             list heap
-            np.ndarray[np.uint8_t, ndim=1] need
+            queue need
 
-        k0 = self.step_expansion
-        if k0 < 1:
-            k0 = 1
-        if k0 > self.max_neighbors_search:
-            k0 = self.max_neighbors_search
-        if k0 > self.num_points - 1:
-            k0 = self.num_points - 1
-        self.knn_cap = k0
-        self.knn_used = np.full(self.num_points, k0, dtype=np.intp)
+        self.knn_skip = np.ones(self.num_points, dtype=np.intp)
         self.skip_radius = np.zeros(self.num_points, dtype=np.double)
 
-        self.logger.info(f'kNN querying: %s', k0)
-        self.knn_dist, self.knn_indices = self.dist_tree.query(
+        self.logger.info(f'kNN querying: step expansion %s', self.step_expansion)
+        self.knn_dist, self.knn_indices = self.dist_tree.query_init(
                     self.query_X,
-                    k=k0,
+                    k=self.step_expansion,
                     dualtree=True,
                     breadth_first=True,
                     )
         self.logger.info('kNN querying: done')
-        for i in range(self.num_points):
-            self.skip_radius[i] = self.knn_dist[i, k0 - 1]
 
         heap = []
 #### Initialization and pure reciprocity (ranks equal)
         self.logger.info(f'MSTree formation: initializing nearest connections. Pure autoconnect.')
-        warn, infinitesimal = 0, 0
+        warn, infinitesimal, pure_unreachable = 0, 0, 0
         i = self.num_points
         while i:
             i -= 1
@@ -619,55 +590,63 @@ cdef class UniversalReciprocity (object):
             if self._evaluate_reciprocity(i, self.U.mark_up(i), &rel):
                 heapq.heappush(heap,
                                (rel.reciprocity, i, rel.endpoint, rel.max_rank))
+            else:
+                pure_unreachable += 1
 
         if self.result_edges >= self.num_points - 1:
             self.logger.info('Two subjects only')
             return
         if warn > 0:
             self.logger.info(
-            'A lot of values('+str(warn)+') are the same. Try increasing max_neighbors_search('+str(self.max_neighbors_search)+
+            'A lot of values('+str(warn)+') are the same. Try increasing step_expansion('+str(self.step_expansion)+
             ') parameter.')
 
         if infinitesimal > 0:
             self.logger.warning('Some distances('+str(infinitesimal)+') are smaller than self.PRECISION ('+str(self.PRECISION)+
                    ') level. Try decreasing double_precision parameter.')
 
+        if pure_unreachable > 0:
+            self.logger.warning('A lot of points are unreachable('+str(pure_unreachable)+') from the start. And they are removed from evaluation. Try increasing step_expansion('+str(self.step_expansion)+
+            ') parameter.')
+
         self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with complex connections.')
         edge_cases = 0
 ############
-        while self.result_edges < self.num_points - 1:
-            if heap:
-                rel.reciprocity, i, rel.endpoint, rel.max_rank = heapq.heappop(heap)
+        need = queue.LifoQueue()
+        need_expansion = 0
+        while heap and self.result_edges < self.num_points - 1:
+            rel.reciprocity, i, rel.endpoint, rel.max_rank = heapq.heappop(heap)
 
-                p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
-                if p != op:
+            p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
+            if p != op:
+                if not need:
                     self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank)
                     p = self.U.union(i, rel.endpoint, p, op)
-                    if rel.max_rank == self.knn_used[i] or rel.max_rank == self.knn_used[rel.endpoint]:
+                    if rel.max_rank < 0:
                         edge_cases += 1
-
-                if self._evaluate_reciprocity(i, p, &rel):
+                else:
                     heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
-                continue
+                    self._expand_knn(need)
+                    need_count = len(need)
+                    while need_count:
+                        need_count -= 1
+                        i = need.pop
+                        if self._evaluate_reciprocity(i, self.U.mark_up(i), &rel):
+                            heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
+                        elif rel.is_full != 0:
+                            need.put(i)
+                        else:
+                            self.logger.warning('%s point is dropped', i)
+                    continue
 
-            need = np.zeros(self.num_points, dtype=np.uint8)
-            grown = 0
-            for i in range(self.num_points):
-                if self.knn_used[i] >= self.max_neighbors_search or self.knn_used[i] >= self.num_points - 1:
-                    continue
-                p = self.U.mark_up(i)
-                if self._neighbors_all_connected(i, p):
-                    need[i] = 1
-                    grown += 1
-            if grown == 0:
-                break
-            if self._expand_knn(need) == 0:
-                break
-            for i in range(self.num_points):
-                if not need[i]:
-                    continue
-                if self._evaluate_reciprocity(i, self.U.mark_up(i), &rel):
-                    heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
+            if self._evaluate_reciprocity(i, p, &rel):
+                heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
+            elif rel.is_full != 0:
+                need.put(i)
+            else:
+                self.logger.warning('%s point is dropped', i)
+            continue
+
 ###############
         self.logger.info(
             'MSTree formation: %s edges %.2f%%. Done.',
