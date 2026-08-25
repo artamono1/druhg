@@ -369,22 +369,27 @@ def _node_skip_count(idx_start, idx_end, i_node, self_id, leaf_of):
 
 
 
-def _as_skip_rdist(skip_radius, query_ids, angular_mode, metric_id, p):
-    """Gather full-length skip radii at query_ids and convert to tree rdist."""
-    gathered = np.ascontiguousarray(np.asarray(skip_radius, dtype=np.float64).reshape(-1))
+def _as_skip_rdist(skip_radius, indices, angular_mode, metric_id, p, ):
+    """Convert full-length skip radii (original metric) to tree rdist.
 
-    if angular_mode == MET_COSINE:
-        out = 2.0 * gathered
-    elif angular_mode == MET_ARCCOS:
-        out = 2.0 * (1.0 - np.cos(gathered))
-    elif metric_id in (MET_EUCLIDEAN, MET_SEUCLIDEAN, MET_MAHALANOBIS):
-        out = gathered * gathered
-    elif metric_id == MET_MINKOWSKI:
-        out = np.power(gathered, p)
-    else:
-        out = gathered
-    pos = out > 0.0
-    out[pos] = np.nextafter(out[pos], 0.0)
+    Result is indexed by training id, same layout as ``skip_radius``.
+    The open ball stays strict after rdist conversion (sqrt / **p / chord).
+    """
+    out = np.zeros(len(indices), dtype=np.float64)
+
+    for k in range(len(indices)):
+        i = indices[k]
+        v = skip_radius[i]
+        if angular_mode == MET_COSINE:
+            out[k] = 2.0 * v
+        elif angular_mode == MET_ARCCOS:
+            out[k] = 2.0 * (1.0 - np.cos(v))
+        elif metric_id in (MET_EUCLIDEAN, MET_SEUCLIDEAN, MET_MAHALANOBIS):
+            out[k] = v * v
+        elif metric_id == MET_MINKOWSKI:
+            out[k]  = np.power(v, p)
+        else:
+            out[k]  = v
     return out
 
 _STACK_CAP = 64
@@ -1506,9 +1511,6 @@ class NeighborTree:
         query_ids = np.ascontiguousarray(np.asarray(indices, dtype=np.intp).reshape(-1))
         if query_ids.size and (int(query_ids.min()) < 0 or int(query_ids.max()) >= self.n_samples):
             raise ValueError('indices must be in [0, n_samples)')
-        sr = np.ascontiguousarray(np.asarray(skip_radius, dtype=np.float64).reshape(-1))
-        if sr.shape[0] != self.n_samples:
-            raise ValueError('skip_radius must have length n_samples')
 
         n_queries = query_ids.shape[0]
         if n_queries == 0:
@@ -1517,8 +1519,8 @@ class NeighborTree:
                     np.empty((0, k), dtype=np.intp))
 
         skip_rdist = _as_skip_rdist(
-            sr, query_ids, self.angular_mode, self.metric_id, self.p)
-        
+            skip_radius, indices, self.angular_mode, self.metric_id, self.p)
+
         X = np.ascontiguousarray(self._tree_data[query_ids])
         dist_arr = np.full((n_queries, k), INF, dtype=np.float64)
         ind_arr = np.zeros((n_queries, k), dtype=np.intp)
