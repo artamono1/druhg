@@ -18,6 +18,7 @@ import logging
 
 from ._druhg_unionfind import UnionFind
 from ._druhg_unionfind cimport UnionFind
+from ._druhg_pairwise import PairwiseDistanceTreeSparse, PairwiseDistanceTreeGeneric
 
 import _heapq as heapq
 import queue
@@ -33,151 +34,16 @@ def allocate_buffer_edgepairs(np.intp_t num_points):
 def allocate_buffer_ranks(np.intp_t num_points):
     return np.empty((num_points - 1), dtype=np.intp)
 
-cdef class PairwiseDistanceTreeSparse(object):
-    cdef object data_arr
-    cdef int data_size
 
-    def __init__(self, N, d):
-        self.data_size = N
-        self.data_arr = d
-
-    cpdef tuple query_init(self, d, k, dualtree = 0, breadth_first = 0, skip_radius=None, indices=None):
-        # TODO: actually we need to consider replacing INF with something else.
-        # Reciprocity of absent link is not the same as the INF. Do reciprocity with graphs!
-        cdef np.ndarray[np.double_t, ndim=2] knn_dist
-        cdef np.ndarray[np.intp_t, ndim=2] knn_indices
-        cdef np.ndarray[np.intp_t, ndim=1] n_skipped
-        cdef np.ndarray[np.double_t, ndim=1] skip_arr
-        cdef np.ndarray[np.intp_t, ndim=1] query_ids
-        cdef np.double_t r_i, val
-        cdef np.intp_t i, j, pos, yi, q, n_q
-        cdef bint has_skip
-
-        if indices is None:
-            query_ids = np.arange(self.data_size, dtype=np.intp)
-        else:
-            query_ids = np.ascontiguousarray(np.asarray(indices, dtype=np.intp).reshape(-1))
-        n_q = query_ids.shape[0]
-
-        knn_dist = INF*np.ones((n_q, k))
-        knn_indices = np.zeros((n_q, k), dtype=np.intp)
-        has_skip = skip_radius is not None
-        if has_skip:
-            skip_arr = np.asarray(skip_radius, dtype=np.float64)
-            if skip_arr.ndim == 0:
-                skip_arr = np.full(n_q, float(skip_arr), dtype=np.float64)
-            elif skip_arr.shape[0] == self.data_size and n_q != self.data_size:
-                skip_arr = skip_arr[query_ids]
-            n_skipped = np.zeros(n_q, dtype=np.intp)
-        else:
-            skip_arr = np.zeros(1, dtype=np.float64)
-            n_skipped = np.zeros(1, dtype=np.intp)
-
-        warning = 0
-
-        q = n_q
-        while q:
-            q -= 1
-            i = query_ids[q]
-            row = self.data_arr.getrow(i)
-            idx, data = row.indices, row.data
-            sorted = np.argsort(data)
-            pos = 0
-            yi = 0
-            r_i = skip_arr[q] if has_skip else -1.0
-            for s in sorted:
-                j = idx[s]
-                if j == i:
-                    warning += 1
-                    continue
-                val = data[s]
-                if has_skip and val < r_i:
-                    yi += 1
-                    continue
-                if pos >= k:
-                    if not has_skip:
-                        break
-                    continue
-                knn_dist[q][pos] = val
-                knn_indices[q][pos] = j
-                pos += 1
-            if has_skip:
-                n_skipped[q] = yi
-
-        if warning:
-            logging.getLogger(__package__).warning('Attention!: Sparse matrix has an edge that forms a loop! They were zeroed. '+str(warning))
-
-        if has_skip:
-            return n_skipped, knn_dist, knn_indices
-        return knn_dist, knn_indices
-
-cdef class PairwiseDistanceTreeGeneric(object):
-    cdef object data_arr
-    cdef int data_size
-
-    def __init__(self, N, d):
-        self.data_size = N
-        self.data_arr = d
-
-    cpdef tuple query_init(self, d, k, dualtree = 0, breadth_first = 0, skip_radius=None, indices=None):
-        cdef np.ndarray[np.double_t, ndim=2] knn_dist
-        cdef np.ndarray[np.intp_t, ndim=2] knn_indices
-        cdef np.ndarray[np.intp_t, ndim=1] n_skipped
-        cdef np.ndarray[np.double_t, ndim=1] skip_arr
-        cdef np.ndarray[np.intp_t, ndim=1] query_ids
-        cdef np.double_t r_i, val
-        cdef np.intp_t i, j, pos, yi, q, n_q
-        cdef bint has_skip
-
-        if indices is None:
-            query_ids = np.arange(self.data_size, dtype=np.intp)
-        else:
-            query_ids = np.ascontiguousarray(np.asarray(indices, dtype=np.intp).reshape(-1))
-        n_q = query_ids.shape[0]
-
-        knn_dist = INF*np.ones((n_q, k))
-        knn_indices = np.zeros((n_q, k), dtype=np.intp)
-        has_skip = skip_radius is not None
-        if has_skip:
-            skip_arr = np.asarray(skip_radius, dtype=np.float64)
-            if skip_arr.ndim == 0:
-                skip_arr = np.full(n_q, float(skip_arr), dtype=np.float64)
-            elif skip_arr.shape[0] == self.data_size and n_q != self.data_size:
-                skip_arr = skip_arr[query_ids]
-            n_skipped = np.zeros(n_q, dtype=np.intp)
-        else:
-            skip_arr = np.zeros(1, dtype=np.float64)
-            n_skipped = np.zeros(1, dtype=np.intp)
-
-        q = n_q
-        while q:
-            q -= 1
-            i = query_ids[q]
-            row = self.data_arr[i]
-            sorted = np.argsort(row)
-            pos = 0
-            yi = 0
-            r_i = skip_arr[q] if has_skip else -1.0
-            for j in sorted:
-                if j == i:
-                    continue
-                val = row[j]
-                if has_skip and val < r_i:
-                    yi += 1
-                    continue
-                if pos >= k:
-                    if not has_skip:
-                        break
-                    continue
-                knn_dist[q][pos] = val
-                knn_indices[q][pos] = j
-                pos += 1
-            if has_skip:
-                n_skipped[q] = yi
-
-        if has_skip:
-            return n_skipped, knn_dist, knn_indices
-        return knn_dist, knn_indices
+cdef np.intp_t _knn_row_len(np.double_t[:] distances):
+    cdef np.intp_t t, w
+    w = distances.shape[0]
+    t = 0
+    while t < w:
+        if distances[t] == 0.:
+            return t
+        t += 1
+    return w
 
 
 cdef class UniversalReciprocity (object):
@@ -198,8 +64,9 @@ cdef class UniversalReciprocity (object):
 
     step_expansion : int, optional (default= 16)
         Neighbor-query batch size. Starts with this many neighbors per point
-        and fetches another batch on demand (via ``skip_radius``) while
-        under ``max_neighbors_search``.
+        and fetches another batch on demand (via ``query_extend`` / skip
+        radii) while under ``max_neighbors_search``. Rows may grow past this
+        when neighbors tie at the last distance.
 
     metric : string, optional (default='euclidean')
         The metric used to compute distances for the tree.
@@ -234,7 +101,9 @@ cdef class UniversalReciprocity (object):
         np.ndarray knn_dist
         np.ndarray knn_indices
         np.ndarray knn_skip
+        np.ndarray knn_scope
         np.ndarray skip_radius
+        object expand_ids
         object query_X
 
         np.intp_t result_edges
@@ -281,12 +150,12 @@ cdef class UniversalReciprocity (object):
         else:
             self.max_neighbors_search = max_neighbors_search
 
-        if self.step_expansion is None:
-            self.step_expansion = self.num_points
+        if self.step_expansion is None or self.step_expansion < 1 or self.step_expansion > self.num_points - 1:
+            self.step_expansion = self.num_points - 1
         else:
             self.step_expansion = step_expansion
-        if self.step_expansion < 1:
-            self.step_expansion = 1
+
+        self.knn_cap = self.max_neighbors_search
 
         self.U = UnionFind(self.num_points, buffer_uf, buffer_fast)
         self.U.nullify()
@@ -412,7 +281,7 @@ cdef class UniversalReciprocity (object):
         indices = self.knn_indices[i]
         distances = self.knn_dist[i]
 
-        arr_size = self.step_expansion
+        arr_size = _knn_row_len(distances)
 
         is_reachable = 0
         is_united = 0
@@ -440,10 +309,15 @@ cdef class UniversalReciprocity (object):
             is_full = 0
             is_united = 1
 
-            rank = r + rank_united
+            rank = r + rank_united + 1
+
+            odistances = self.knn_dist[j]
+            oindices = self.knn_indices[j]
+            oarr_size = _knn_row_len(odistances)
 
             orank_united = self.knn_skip[j]
-            if rank >= orank_united + arr_size + 1:
+            if rank >= orank_united + oarr_size + 1:
+                self.expand_ids.add(j)
                 continue
 
             rr = r + 1
@@ -452,14 +326,11 @@ cdef class UniversalReciprocity (object):
                 rr += 1
                 rank += 1
 
-            odistances = self.knn_dist[j]
-            oindices = self.knn_indices[j]
-
             is_reachable = -1
             orank = orank_united
             inter = 0
             rr = 0
-            while rr < arr_size and odistances[rr] <= d + self.PRECISION:
+            while rr < oarr_size and odistances[rr] <= d + self.PRECISION:
                 if oindices[rr] == i:
                     is_reachable = 1
                 elif oindices[rr] in self.ball:
@@ -467,14 +338,19 @@ cdef class UniversalReciprocity (object):
                 rr += 1
                 orank += 1
 
+            if orank == 0:
+                continue
+            if rank - inter <= 0 or orank - inter <= 0:
+                continue
+
             ddis = d
             oddis = d
             if rank < orank:
                 rr = orank - 1 - rank_united
-                ddis = distances[rr] if rr>0 and rr < arr_size else d*2.
+                ddis = distances[rr] if rr >= 0 and rr < arr_size else d*2.
             else:
                 rr = rank - 1 - orank_united
-                oddis = odistances[rr] if rr>0 and rr < arr_size else d*2.
+                oddis = odistances[rr] if rr >= 0 and rr < oarr_size else d*2.
 
             v1 = max(ddis + self.PRECISION,  d * rank / (orank - inter)) # со своей стороны r<=oR
             v2 = max(oddis + self.PRECISION,  d * orank / (rank - inter)) # с чужой стороны
@@ -500,44 +376,101 @@ cdef class UniversalReciprocity (object):
 
         return res
 
+    cdef void _ensure_knn_width(self, np.intp_t width):
+        cdef np.intp_t old_w, n
+        old_w = self.knn_dist.shape[1]
+        if old_w >= width:
+            return
+        n = self.num_points
+        new_d = np.zeros((n, width), dtype=np.float64)
+        new_i = np.zeros((n, width), dtype=np.intp)
+        new_d[:, :old_w] = self.knn_dist
+        new_i[:, :old_w] = self.knn_indices
+        self.knn_dist = new_d
+        self.knn_indices = new_i
+
+    cdef np.intp_t _scope_for_index(self, np.intp_t i):
+        cdef np.intp_t k, rem, n1
+        n1 = self.num_points - 1
+        rem = self.max_neighbors_search - self.knn_skip[i]
+        k = self.knn_scope[i] + self.step_expansion
+        if rem < k:
+            k = rem
+        if k > n1:
+            k = n1
+        if k < 1:
+            return 0
+        return k
+
+    cdef bint _can_expand(self, np.intp_t i):
+        cdef np.intp_t used
+        if self.knn_dist[i, 0] == 0.:
+            return 0
+        used = _knn_row_len(self.knn_dist[i])
+        if self.knn_skip[i] + used >= self.max_neighbors_search:
+            return 0
+        return self._scope_for_index(i) >= 1
+
     cdef np.intp_t _expand_knn(self, object need):
         cdef:
-            np.intp_t i, t, pos, n_add, j, n, q, n_q, added, u
-            np.double_t d
+            np.intp_t i, t, k, n, q, n_q, w, old_w, n_keep
             np.ndarray idx
+            np.ndarray idx_q
+            np.ndarray scope_q
             np.ndarray n_skipped
             np.ndarray[np.double_t, ndim=2] new_dist
             np.ndarray[np.intp_t, ndim=2] new_ind
-            bint seen
-            object need_arr
 
         n = self.num_points
-        n_add = self.step_expansion
-        need_arr = np.asarray(need)
-        if need_arr.ndim == 1 and need_arr.shape[0] == n and need_arr.dtype == np.uint8:
-            idx = np.flatnonzero(need_arr).astype(np.intp)
+        if hasattr(need, 'queue'):
+            n_q = need.qsize()
+            if n_q == 0:
+                return 0
+            idx = np.fromiter(need.queue, dtype=np.intp, count=n_q)
         else:
-            idx = np.ascontiguousarray(need_arr, dtype=np.intp).ravel()
-        n_q = idx.shape[0]
-        if n_q == 0:
-            return 0
+            idx = np.ascontiguousarray(np.asarray(need, dtype=np.intp).ravel())
+            n_q = idx.shape[0]
+            if n_q == 0:
+                return 0
 
-        self.logger.info('kNN expand: %s points +%s neighbors, skip_radius from stored prefix',
-                         n_q, n_add)
-
-        n_skipped, new_dist, new_ind = self.dist_tree.query_skip(indices=idx, skip_radius=self.skip_radius, k=n_add)
-
-        added = 0
+        scope_q = np.empty(n_q, dtype=np.intp)
+        idx_q = np.empty(n_q, dtype=np.intp)
+        n_keep = 0
         for q in range(n_q):
             i = idx[q]
-            self.knn_skip[i] = n_skipped[q]
+            k = self._scope_for_index(i)
+            if k < 1:
+                continue
+            self.knn_scope[i] = k
+            idx_q[n_keep] = i
+            scope_q[n_keep] = k
+            n_keep += 1
+        if n_keep == 0:
+            return 0
+        idx_q = idx_q[:n_keep]
+        scope_q = scope_q[:n_keep]
 
-            for t in range(n_add):
+        self.logger.info('kNN extend: %s points, per-index knn_scope, skip_radius from stored prefix',
+                         n_keep)
+
+        n_skipped, new_dist, new_ind = self.dist_tree.query_extend(
+            idx_q, self.skip_radius, scope_q)
+
+        w = new_dist.shape[1]
+        self._ensure_knn_width(w)
+        old_w = self.knn_dist.shape[1]
+        for q in range(n_keep):
+            i = idx_q[q]
+            self.knn_skip[i] = n_skipped[q]
+            for t in range(w):
                 self.knn_dist[i, t] = new_dist[q, t]
                 self.knn_indices[i, t] = new_ind[q, t]
+            for t in range(w, old_w):
+                self.knn_dist[i, t] = 0.
+                self.knn_indices[i, t] = 0
 
-        self.logger.info('kNN expand: done, +%s stored', added)
-        return added
+        self.logger.info('kNN extend: done, width %s', old_w)
+        return n_keep
 
     cdef _compute_tree_edges(self):
         # DRUHG
@@ -550,14 +483,14 @@ cdef class UniversalReciprocity (object):
             Relation rel = Relation(0,0,0,0, 0,0)
 
             list heap
-            queue need
 
-        self.knn_skip = np.ones(self.num_points, dtype=np.intp)
+        self.knn_skip = np.zeros(self.num_points, dtype=np.intp)
+        self.knn_scope = np.full(self.num_points, self.step_expansion, dtype=np.intp)
         self.skip_radius = np.zeros(self.num_points, dtype=np.double)
+        self.expand_ids = set()
 
         self.logger.info(f'kNN querying: step expansion %s', self.step_expansion)
         self.knn_dist, self.knn_indices = self.dist_tree.query_init(
-                    self.query_X,
                     k=self.step_expansion,
                     dualtree=True,
                     breadth_first=True,
@@ -613,39 +546,57 @@ cdef class UniversalReciprocity (object):
         edge_cases = 0
 ############
         need = queue.LifoQueue()
-        need_expansion = 0
-        while heap and self.result_edges < self.num_points - 1:
-            rel.reciprocity, i, rel.endpoint, rel.max_rank = heapq.heappop(heap)
+        while self.result_edges < self.num_points - 1:
+            if heap:
+                rel.reciprocity, i, rel.endpoint, rel.max_rank = heapq.heappop(heap)
 
-            p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
-            if p != op:
-                if not need:
+                p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
+                if p != op:
                     self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank)
                     p = self.U.union(i, rel.endpoint, p, op)
                     if rel.max_rank < 0:
                         edge_cases += 1
-                else:
-                    heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
-                    self._expand_knn(need)
-                    need_count = len(need)
-                    while need_count:
-                        need_count -= 1
-                        i = need.pop
-                        if self._evaluate_reciprocity(i, self.U.mark_up(i), &rel):
-                            heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
-                        elif rel.is_full != 0:
-                            need.put(i)
-                        else:
-                            self.logger.warning('%s point is dropped', i)
-                    continue
 
-            if self._evaluate_reciprocity(i, p, &rel):
-                heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
-            elif rel.is_full != 0:
-                need.put(i)
-            else:
-                self.logger.warning('%s point is dropped', i)
-            continue
+                self.expand_ids.clear()
+                if self._evaluate_reciprocity(i, p, &rel):
+                    heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
+                elif rel.is_full != 0 and self._can_expand(i):
+                    need.put(i)
+                else:
+                    for j in self.expand_ids:
+                        if self._can_expand(j):
+                            need.put(j)
+                    if not self.expand_ids:
+                        self.logger.warning('%s point is dropped', i)
+                continue
+
+            if need.empty():
+                i = self.num_points
+                while i:
+                    i -= 1
+                    if self._can_expand(i):
+                        need.put(i)
+                if need.empty():
+                    break
+
+            grown = self._expand_knn(need)
+            if grown == 0:
+                break
+            need_count = need.qsize()
+            while need_count:
+                need_count -= 1
+                i = need.get()
+                self.expand_ids.clear()
+                if self._evaluate_reciprocity(i, self.U.mark_up(i), &rel):
+                    heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
+                elif rel.is_full != 0 and self._can_expand(i):
+                    need.put(i)
+                else:
+                    for j in self.expand_ids:
+                        if self._can_expand(j):
+                            need.put(j)
+                    if not self.expand_ids:
+                        self.logger.warning('%s point is dropped', i)
 
 ###############
         self.logger.info(
