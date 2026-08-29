@@ -35,17 +35,6 @@ def allocate_buffer_ranks(np.intp_t num_points):
     return np.empty((num_points - 1), dtype=np.intp)
 
 
-cdef np.intp_t _knn_row_len(np.double_t[:] distances):
-    cdef np.intp_t t, w
-    w = distances.shape[0]
-    t = 0
-    while t < w:
-        if distances[t] == 0.:
-            return t
-        t += 1
-    return w
-
-
 cdef class UniversalReciprocity (object):
     """Constructs DRUHG spanning tree and marks parents of clusters
 
@@ -91,7 +80,6 @@ cdef class UniversalReciprocity (object):
 
         np.intp_t max_neighbors_search
         np.intp_t step_expansion
-        np.intp_t knn_cap
 
         np.intp_t n_jobs
 
@@ -101,6 +89,7 @@ cdef class UniversalReciprocity (object):
         np.ndarray knn_dist
         np.ndarray knn_indices
         np.ndarray knn_skip
+        np.ndarray knn_used
         np.ndarray knn_scope
         np.ndarray skip_radius
         object expand_ids
@@ -145,17 +134,17 @@ cdef class UniversalReciprocity (object):
         else:
             raise ValueError('algorithm value '+str(algorithm)+' is not valid')
 
-        if max_neighbors_search is None:
-            self.max_neighbors_search = self.num_points
+        if max_neighbors_search is None or max_neighbors_search < 1 or max_neighbors_search > self.num_points - 1:
+            self.max_neighbors_search = self.num_points - 1
         else:
             self.max_neighbors_search = max_neighbors_search
 
-        if self.step_expansion is None or self.step_expansion < 1 or self.step_expansion > self.num_points - 1:
+        self.step_expansion = step_expansion
+        if self.step_expansion is None and self.max_neighbors_search is not None:
+            self.step_expansion = self.max_neighbors_search
+        if self.step_expansion is None \
+            or self.step_expansion < 1 or self.step_expansion > self.num_points - 1:
             self.step_expansion = self.num_points - 1
-        else:
-            self.step_expansion = step_expansion
-
-        self.knn_cap = self.max_neighbors_search
 
         self.U = UnionFind(self.num_points, buffer_uf, buffer_fast)
         self.U.nullify()
@@ -219,11 +208,11 @@ cdef class UniversalReciprocity (object):
         parent = self.U.mark_up(i)
         indices = self.knn_indices[i]
         distances = self.knn_dist[i]
-        arr_size = self.step_expansion
+        used_i = self.knn_used[i]
 
         rel.reciprocity = INF
         core_dis = distances[0]
-        for r in range(0, arr_size):
+        for r in range(0, used_i):
             j = indices[r]
             if parent == self.U.mark_up(j):
                 continue
@@ -235,24 +224,27 @@ cdef class UniversalReciprocity (object):
             if dis == 0.: # degenerate case.
                 rel.reciprocity = 0.
                 rel.endpoint = j
-                rel.max_rank = bisect.bisect(distances, 0. + self.PRECISION) + 1
+                rel.max_rank = bisect.bisect(distances[:used_i], 0. + self.PRECISION) + 1
                 return 1
             infinitesimal += dis <= self.PRECISION
 
             odistances = self.knn_dist[j]
+            used_j = self.knn_used[j]
             if odistances[0] + self.PRECISION < dis:
                 return 0
 
             rank = r + 1
-            while rank < arr_size and distances[rank] <= dis + self.PRECISION:
+            while rank < used_i and distances[rank] <= dis + self.PRECISION:
                 rank += 1
 
+            if rank > used_j:
+                continue
             odis = odistances[rank - 1]
             if odis >= dis + self.PRECISION:
                 continue
             if odis + self.PRECISION <= dis :
                 continue
-            if rank < arr_size and odistances[rank] < dis + self.PRECISION:
+            if rank < used_j and odistances[rank] < dis + self.PRECISION:
                 continue
 
             rel.reciprocity = dis
@@ -280,8 +272,7 @@ cdef class UniversalReciprocity (object):
         rank_united = self.knn_skip[i]
         indices = self.knn_indices[i]
         distances = self.knn_dist[i]
-
-        arr_size = _knn_row_len(distances)
+        arr_size = self.knn_used[i]
 
         is_reachable = 0
         is_united = 0
@@ -293,8 +284,6 @@ cdef class UniversalReciprocity (object):
         for r in range(0, arr_size):
 
             d = distances[r]
-            if d == 0:
-                break
             if d - self.PRECISION > best: # v всегда >= dis по построению
                 break
 
@@ -313,7 +302,7 @@ cdef class UniversalReciprocity (object):
 
             odistances = self.knn_dist[j]
             oindices = self.knn_indices[j]
-            oarr_size = _knn_row_len(odistances)
+            oarr_size = self.knn_used[j]
 
             orank_united = self.knn_skip[j]
             if rank >= orank_united + oarr_size + 1:
@@ -404,16 +393,16 @@ cdef class UniversalReciprocity (object):
 
     cdef bint _can_expand(self, np.intp_t i):
         cdef np.intp_t used
-        if self.knn_dist[i, 0] == 0.:
+        used = self.knn_used[i]
+        if used < 1:
             return 0
-        used = _knn_row_len(self.knn_dist[i])
         if self.knn_skip[i] + used >= self.max_neighbors_search:
             return 0
         return self._scope_for_index(i) >= 1
 
     cdef np.intp_t _expand_knn(self, object need):
         cdef:
-            np.intp_t i, t, k, n, q, n_q, w, old_w, n_keep
+            np.intp_t i, t, k, n, q, n_q, w, old_w, n_keep, used
             np.ndarray idx
             np.ndarray idx_q
             np.ndarray scope_q
@@ -462,12 +451,16 @@ cdef class UniversalReciprocity (object):
         for q in range(n_keep):
             i = idx_q[q]
             self.knn_skip[i] = n_skipped[q]
+            used = 0
             for t in range(w):
                 self.knn_dist[i, t] = new_dist[q, t]
                 self.knn_indices[i, t] = new_ind[q, t]
+                if new_dist[q, t] != 0.:
+                    used = t + 1
             for t in range(w, old_w):
                 self.knn_dist[i, t] = 0.
                 self.knn_indices[i, t] = 0
+            self.knn_used[i] = used
 
         self.logger.info('kNN extend: done, width %s', old_w)
         return n_keep
@@ -485,6 +478,7 @@ cdef class UniversalReciprocity (object):
             list heap
 
         self.knn_skip = np.zeros(self.num_points, dtype=np.intp)
+        self.knn_used = np.full(self.num_points, self.step_expansion, dtype=np.intp)
         self.knn_scope = np.full(self.num_points, self.step_expansion, dtype=np.intp)
         self.skip_radius = np.zeros(self.num_points, dtype=np.double)
         self.expand_ids = set()

@@ -34,7 +34,7 @@ def test_knn_matches_brute(Tree, metric, kwargs):
     X = np.ascontiguousarray(rng.randn(120, 4))
     k = 7
     tree = Tree(X, leaf_size=8, metric=metric, **kwargs)
-    dist, ind = tree.query(X, k=k)
+    dist, ind = tree.query_init(X, k=k)
     brute_dist, _ = _brute_knn(X, X, k, metric, **kwargs)
     np.testing.assert_allclose(dist, brute_dist, rtol=1e-7, atol=1e-9)
     assert not np.any(ind == np.arange(len(X))[:, None])
@@ -47,7 +47,7 @@ def test_query_subset_matches_brute(Tree):
     X = np.ascontiguousarray(rng.randn(80, 3))
     Y = np.ascontiguousarray(X[10:25])
     tree = Tree(X, leaf_size=5, metric='euclidean')
-    dist, ind = tree.query(Y, k=4, dualtree=True, breadth_first=True)
+    dist, ind = tree.query_init(Y, k=4, dualtree=True, breadth_first=True)
     brute_dist, _ = _brute_knn(X, Y, 4, 'euclidean')
     np.testing.assert_allclose(dist, brute_dist, rtol=1e-7, atol=1e-9)
     assert not np.any(ind == np.arange(len(Y))[:, None])
@@ -59,7 +59,7 @@ def test_balltree_extra_metrics():
     k = 3
     for metric in ('canberra', 'braycurtis', 'cosine'):
         tree = BallTree(X, leaf_size=6, metric=metric)
-        dist, _ = tree.query(X, k=k)
+        dist, _ = tree.query_init(X, k=k)
         brute_dist, _ = _brute_knn(X, X, k, metric)
         np.testing.assert_allclose(dist, brute_dist, rtol=1e-6, atol=1e-8)
 
@@ -74,9 +74,9 @@ def test_query_k_bounds():
     X = np.ascontiguousarray([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]])
     tree = KDTree(X, leaf_size=1)
     with pytest.raises(ValueError):
-        tree.query(X, k=3)
+        tree.query_init(X, k=3)
     with pytest.raises(ValueError):
-        tree.query(X, k=0)
+        tree.query_init(X, k=0)
 
 
 def test_druhg_kd_and_ball_trees():
@@ -103,8 +103,8 @@ def test_sklearn_agreement_if_present():
     ):
         ours = Ours(X, leaf_size=10, metric=metric)
         theirs = Theirs(X, leaf_size=10, metric=metric)
-        d0, i0 = ours.query(X, k=k)
-        d1, i1 = theirs.query(X, k=k + 1)
+        d0, i0 = ours.query_init(X, k=k)
+        d1, i1 = theirs.query_init(X, k=k + 1)
         np.testing.assert_allclose(d0, d1[:, 1:], rtol=1e-7, atol=1e-9)
         np.testing.assert_array_equal(i0, i1[:, 1:])
 
@@ -118,8 +118,8 @@ def test_one_dimensional_knn_and_druhg():
         t1 = Tree(x1, leaf_size=4, metric='euclidean')
         t2 = Tree(x2, leaf_size=4, metric='euclidean')
         assert t1.data.shape == (60, 1)
-        d1, _ = t1.query(x1, k=k)
-        d2, _ = t2.query(x2, k=k)
+        d1, _ = t1.query_init(x1, k=k)
+        d2, _ = t2.query_init(x2, k=k)
         np.testing.assert_allclose(d1, d2, rtol=1e-9, atol=1e-12)
         brute, _ = _brute_knn(x2, x2, k, 'euclidean')
         np.testing.assert_allclose(d1, brute, rtol=1e-7, atol=1e-9)
@@ -160,10 +160,10 @@ def test_skip_radius_matches_brute(Tree, metric, kwargs):
     rng = np.random.RandomState(5)
     X = np.ascontiguousarray(rng.randn(90, 3))
     tree = Tree(X, leaf_size=6, metric=metric, **kwargs)
-    full_dist, _ = tree.query(X, k=8)
+    full_dist, _ = tree.query_init(X, k=8)
     skip_radius = 0.5 * (full_dist[:, 3] + full_dist[:, 4])
     n = 5
-    skipped, dist, ind = tree.query(X, k=n, skip_radius=skip_radius)
+    skipped, dist, ind = tree.query_init(X, k=n, skip_radius=skip_radius)
     brute_y, brute_dist, _ = _brute_skip_annulus(X, skip_radius, n, metric, **kwargs)
     np.testing.assert_array_equal(skipped, brute_y)
     np.testing.assert_allclose(dist, brute_dist, rtol=1e-6, atol=1e-8)
@@ -171,12 +171,12 @@ def test_skip_radius_matches_brute(Tree, metric, kwargs):
     assert np.all(dist[:, 0] + 1e-12 >= skip_radius)
 
 
-def test_skip_radius_zero_matches_plain_query():
+def test_skip_radius_zero_matches_plain_query_init():
     rng = np.random.RandomState(6)
     X = np.ascontiguousarray(rng.randn(40, 2))
     tree = KDTree(X, leaf_size=4, metric='euclidean')
-    d0, i0 = tree.query(X, k=6)
-    skipped, d1, i1 = tree.query(X, k=6, skip_radius=0.0)
+    d0, i0 = tree.query_init(X, k=6)
+    skipped, d1, i1 = tree.query_init(X, k=6, skip_radius=0.0)
     np.testing.assert_array_equal(skipped, 0)
     np.testing.assert_allclose(d0, d1)
     np.testing.assert_array_equal(i0, i1)
@@ -186,10 +186,10 @@ def test_skip_radius_scalar_and_return_indices_only():
     rng = np.random.RandomState(7)
     X = np.ascontiguousarray(rng.randn(50, 2))
     tree = BallTree(X, leaf_size=5, metric='euclidean')
-    d_full, _ = tree.query(X, k=4)
+    d_full, _ = tree.query_init(X, k=4)
     r = float(np.median(d_full[:, 2]))
-    skipped, dist, ind = tree.query(X, k=3, skip_radius=r)
-    skipped2, ind2 = tree.query(X, k=3, skip_radius=r, return_distance=False)
+    skipped, dist, ind = tree.query_init(X, k=3, skip_radius=r)
+    skipped2, ind2 = tree.query_init(X, k=3, skip_radius=r, return_distance=False)
     brute_y, brute_dist, brute_ind = _brute_skip_annulus(X, r, 3, 'euclidean')
     np.testing.assert_array_equal(skipped, brute_y)
     np.testing.assert_array_equal(skipped2, brute_y)
@@ -201,9 +201,9 @@ def test_skip_radius_on_knn_distance_is_open_ball():
     rng = np.random.RandomState(8)
     X = np.ascontiguousarray(rng.randn(70, 2))
     tree = KDTree(X, leaf_size=5, metric='euclidean')
-    full_dist, full_ind = tree.query(X, k=10)
+    full_dist, full_ind = tree.query_init(X, k=10)
     r = full_dist[:, 5]
-    skipped, dist, ind = tree.query(X, k=4, skip_radius=r)
+    skipped, dist, ind = tree.query_init(X, k=4, skip_radius=r)
     np.testing.assert_array_equal(skipped, 5)
     np.testing.assert_allclose(dist, full_dist[:, 5:9], rtol=1e-7, atol=1e-9)
     np.testing.assert_array_equal(ind, full_ind[:, 5:9])
@@ -215,12 +215,12 @@ def test_query_indices_matches_full_rows():
     idx = np.array([3, 10, 21, 55, 70])
     for Tree, metric in ((KDTree, 'euclidean'), (BallTree, 'manhattan')):
         tree = Tree(X, leaf_size=6, metric=metric)
-        dist_all, ind_all = tree.query(X, k=5)
-        dist, ind = tree.query(X, k=5, indices=idx)
+        dist_all, ind_all = tree.query_init(X, k=5)
+        dist, ind = tree.query_init(X, k=5, indices=idx)
         np.testing.assert_allclose(dist, dist_all[idx], rtol=1e-7, atol=1e-9)
         np.testing.assert_array_equal(ind, ind_all[idx])
         assert not np.any(ind == idx[:, None])
-        dist2, ind2 = tree.query(X[idx], k=5, indices=idx)
+        dist2, ind2 = tree.query_init(X[idx], k=5, indices=idx)
         np.testing.assert_allclose(dist2, dist)
         np.testing.assert_array_equal(ind2, ind)
 
@@ -229,11 +229,11 @@ def test_query_indices_with_skip_radius():
     rng = np.random.RandomState(11)
     X = np.ascontiguousarray(rng.randn(60, 2))
     tree = KDTree(X, leaf_size=5, metric='euclidean')
-    full_dist, full_ind = tree.query(X, k=8)
+    full_dist, full_ind = tree.query_init(X, k=8)
     idx = np.array([1, 7, 22, 40])
     r_full = full_dist[:, 3]
-    skipped, dist, ind = tree.query(X, k=3, skip_radius=r_full, indices=idx)
-    skipped2, dist2, ind2 = tree.query(X, k=3, skip_radius=r_full[idx], indices=idx)
+    skipped, dist, ind = tree.query_init(X, k=3, skip_radius=r_full, indices=idx)
+    skipped2, dist2, ind2 = tree.query_init(X, k=3, skip_radius=r_full[idx], indices=idx)
     np.testing.assert_array_equal(skipped, skipped2)
     np.testing.assert_allclose(dist, dist2)
     np.testing.assert_array_equal(ind, ind2)
