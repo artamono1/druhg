@@ -169,7 +169,7 @@ def _resolve_mst_limits(timeout, max_edges):
 
 def _resolve_progress_interval(progress_interval):
     if progress_interval is None:
-        return 5.0
+        return 30.0
     try:
         progress_interval = float(progress_interval)
     except (TypeError, ValueError):
@@ -328,7 +328,7 @@ def druhg(X, max_ranking=16,
         percentage and keep building. ``None`` means no reminder.
         Ctrl+C then stops the MST and continues to labeling.
 
-    progress_interval : float, optional (default=5)
+    progress_interval : float, optional (default=30)
         Seconds between MST status updates (edge count, percentage,
         elapsed time). Visible even when ``verbose=False``, so a large
         input does not look frozen. On a terminal the heartbeat
@@ -410,7 +410,7 @@ def druhg(X, max_ranking=16,
         X, core_n_jobs, max_ranking, leaf_size, metric, p, size_range, limitL, limitH)
     timeout, max_edges = _resolve_mst_limits(timeout, max_edges)
     progress_interval = _resolve_progress_interval(progress_interval)
-    jupyter_progress = _tree_logging.try_jupyter_progress() if progress_interval else None
+    jupyter_progress = _tree_logging.try_jupyter_progress()
     if printout:
         logger.info('Druhg is using defaults for: ' + printout)
 
@@ -791,7 +791,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         """Perform DRUHG clustering.
 
         ``timeout`` and ``max_edges`` log a status reminder and keep
-        building. A ``progress_interval`` heartbeat (default 5s) reports
+        building. A ``progress_interval`` heartbeat (default 30s) reports
         edge count and percentage while the MST runs, in place on a
         terminal or Jupyter cell. Ctrl+C (or interrupt kernel) stops
         only MST construction; labeling is O(n) and always runs on the
