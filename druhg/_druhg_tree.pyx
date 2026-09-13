@@ -259,20 +259,14 @@ cdef class UniversalReciprocity (object):
     cpdef np.intp_t get_num_edges(self): # Small k-nn can result in missing edges
         return self.result_edges
 
-    cpdef bint was_interrupted(self):
-        return self.interrupted
-
     cpdef object get_interrupt_reason(self):
         return self.interrupt_reason
 
     cpdef tuple get_buffers(self):
         return self.result_values_arr, self.U.parent_arr
 
-    cdef void _end_progress_line(self) except *:
-        self.log.end_progress_line()
-
     cdef void _note_interrupt(self, reason) except *:
-        if self.interrupted:
+        if self.interrupted or self.result_edges >= self.num_points - 1:
             return
         self.interrupted = 1
         self.interrupt_reason = reason
@@ -287,25 +281,24 @@ cdef class UniversalReciprocity (object):
             self.result_edges, self.num_points, time.monotonic() - self.t0)
         self.t_last_progress = time.monotonic()
 
-    cdef bint _should_stop_mst(self) except -1:
+    cdef void _should_stop_mst(self) except *:
         cdef np.double_t now
-        now = time.monotonic()
         if self.result_edges < self.num_points - 1:
             if (self.max_edges_limit > 0 and self.result_edges >= self.max_edges_limit
                     and not self.warned_max_edges):
                 self.warned_max_edges = 1
                 self._prompt_limit('max_edges')
-                now = self.t_last_progress
-            if (self.timeout > 0. and (now - self.t0) >= self.timeout
-                    and not self.warned_timeout):
-                self.warned_timeout = 1
-                self._prompt_limit('timeout')
-                now = self.t_last_progress
-            if (self.progress_interval > 0.
-                    and (now - self.t_last_progress) >= self.progress_interval):
-                self._prompt_progress()
+            if self.timeout > 0. or self.progress_interval > 0.:
+                now = time.monotonic()
+                if (self.timeout > 0. and (now - self.t0) >= self.timeout
+                        and not self.warned_timeout):
+                    self.warned_timeout = 1
+                    self._prompt_limit('timeout')
+                    now = self.t_last_progress
+                if (self.progress_interval > 0.
+                        and (now - self.t_last_progress) >= self.progress_interval):
+                    self._prompt_progress()
         PyErr_CheckSignals()
-        return 0
 
     cdef void _finalize_incomplete_tree(self):
         if self.result_edges >= self.num_points - 1:
@@ -482,13 +475,11 @@ cdef class UniversalReciprocity (object):
         try:
             edge_cases = self._form_mst()
         except KeyboardInterrupt:
-            if self.result_edges < self.num_points - 1:
-                self._note_interrupt('KeyboardInterrupt')
+            self._note_interrupt('KeyboardInterrupt')
         try:
             self._finish_mst(edge_cases)
         except KeyboardInterrupt:
-            if self.result_edges < self.num_points - 1:
-                self._note_interrupt('KeyboardInterrupt')
+            self._note_interrupt('KeyboardInterrupt')
 
     cdef np.intp_t _form_mst(self) except -1:
         # DRUHG
@@ -529,8 +520,7 @@ cdef class UniversalReciprocity (object):
             self._should_stop_mst()
             i -= 1
             if knn_dist[i][0] < 0.:
-                self._end_progress_line()
-                self.logger.error('Distances cannot be negative! Exiting. '+str(i)+' '+str(knn_dist[i][0]))
+                self.log.error('Distances cannot be negative! Exiting. '+str(i)+' '+str(knn_dist[i][0]))
                 return edge_cases
             if self._pure_reciprocity(i, knn_indices, knn_dist, &rel, &infinitesimal):
                 self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank - 1)
@@ -550,18 +540,15 @@ cdef class UniversalReciprocity (object):
                                (rel.reciprocity, i, rel.endpoint, rel.max_rank))
 
         if self.result_edges >= self.num_points - 1:
-            self._end_progress_line()
-            self.logger.info('Two subjects only')
+            self.log.info('Two subjects only')
             return edge_cases
         if warn > 0:
-            self._end_progress_line()
-            self.logger.info(
+            self.log.info(
             'A lot of values('+str(warn)+') are the same. Try increasing max_neighbors_search('+str(self.max_neighbors_search)+
             ') parameter.')
 
         if infinitesimal > 0:
-            self._end_progress_line()
-            self.logger.warning('Some distances('+str(infinitesimal)+') are smaller than self.PRECISION ('+str(self.PRECISION)+
+            self.log.warning('Some distances('+str(infinitesimal)+') are smaller than self.PRECISION ('+str(self.PRECISION)+
                    ') level. Try decreasing double_precision parameter.')
 
         self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with complex connections.')
