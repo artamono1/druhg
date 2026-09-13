@@ -39,6 +39,7 @@ def test_progress_interval_prompts_and_continues(caplog):
     assert 'Still working' in caplog.text
     assert '% of 49' in caplog.text
     assert 'Ctrl+C' in caplog.text
+    assert 'Done. Continue labeling' in caplog.text
 
 
 def test_progress_inplace_on_tty(capsys, monkeypatch, caplog):
@@ -52,6 +53,8 @@ def test_progress_inplace_on_tty(capsys, monkeypatch, caplog):
     assert '\r' in err
     assert '\033[2K' in err
     assert 'Ctrl+C stops MST' in err
+    assert 'Done. Continue labeling' in err
+    assert err.rfind('Done. Continue labeling') > err.rfind('Ctrl+C stops MST')
     assert 'Still working' not in err
     assert 'Still working' not in caplog.text
     assert dr.num_edges_ == 49
@@ -79,6 +82,7 @@ def test_progress_inplace_in_jupyter(monkeypatch, caplog):
 
     assert fake.msgs
     assert any('Interrupt kernel stops MST' in msg for msg in fake.msgs)
+    assert 'Done. Continue labeling' in fake.msgs[-1]
     assert fake.closed >= 1
     assert 'Still working' not in caplog.text
     assert dr.num_edges_ == 49
@@ -95,6 +99,7 @@ def test_jupyter_progress_skipped_on_tty(monkeypatch, capsys, caplog):
     err = capsys.readouterr().err
     assert '\r' in err
     assert 'Ctrl+C stops MST' in err
+    assert 'Done. Continue labeling' in err
     assert not any('Interrupt kernel stops MST' in msg for msg in fake.msgs)
 
 

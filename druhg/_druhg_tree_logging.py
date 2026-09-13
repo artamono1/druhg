@@ -86,12 +86,13 @@ def _detect_tty():
 class TreeLogging(object):
     """TTY / Jupyter / logger heartbeats for MST formation."""
 
-    def __init__(self, jupyter_progress=None):
+    def __init__(self):
         self.logger = logging.getLogger(__package__)
         self.debug_enabled = self.logger.isEnabledFor(logging.DEBUG)
-        self.jupyter_progress = jupyter_progress
+        self.jupyter_progress = try_jupyter_progress()
         self.is_tty = _detect_tty()
         self.progress_line_open = False
+        self.saw_heartbeat = False
 
     def _tty_columns(self):
         try:
@@ -152,13 +153,17 @@ class TreeLogging(object):
             'MSTree formation: interruption started (%s) after %s edges %.2f%% of %s.',
             reason, result_edges, pct, total)
 
+    def _inplace_status(self, result_edges, total, pct, elapsed, hint):
+        return 'MSTree formation: %s/%s edges (%.1f%%) %.1fs  %s' % (
+            result_edges, total, pct, elapsed, hint)
+
     def prompt_progress(self, result_edges, num_points, elapsed):
         total, pct = _edge_progress(result_edges, num_points)
+        self.saw_heartbeat = True
         if self.is_tty or self.jupyter_progress is not None:
             hint = 'Ctrl+C stops MST' if self.is_tty else 'Interrupt kernel stops MST'
             self.write_inplace_status(
-                'MSTree formation: %s/%s edges (%.1f%%) %.1fs  %s' % (
-                    result_edges, total, pct, elapsed, hint))
+                self._inplace_status(result_edges, total, pct, elapsed, hint))
             return
         self.logger.warning(
             'MSTree formation: %s edges %.2f%% of %s after %.1fs. Still working. %s',
@@ -181,7 +186,7 @@ class TreeLogging(object):
         self.info('kNN querying: done')
 
     def finish_mst(self, interrupted, interrupt_reason, result_edges, num_points,
-                   edge_cases, max_neighbors_search):
+                   edge_cases, max_neighbors_search, elapsed=0.):
         total, pct = _edge_progress(result_edges, num_points)
         if interrupted:
             if result_edges >= total:
@@ -191,6 +196,17 @@ class TreeLogging(object):
             self.warning(
                 'MSTree formation: interruption result: %s edges %.2f%% of %s (%s). %s',
                 result_edges, pct, total, interrupt_reason, suffix)
+        elif self.saw_heartbeat:
+            if self.is_tty or self.jupyter_progress is not None:
+                self.write_inplace_status(
+                    self._inplace_status(
+                        result_edges, total, pct, elapsed,
+                        'Done. Continue labeling'))
+                self.end_progress_line()
+            else:
+                self.logger.warning(
+                    'MSTree formation: %s edges %.2f%% of %s after %.1fs. Done. Continue labeling.',
+                    result_edges, pct, total, elapsed)
         else:
             self.info(
                 'MSTree formation: %s edges %.2f%%. Done.',

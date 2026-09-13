@@ -24,7 +24,6 @@ from joblib.parallel import cpu_count
 from ._druhg_neighbors import KDTree, BallTree, KDTREE_VALID_METRICS, BALLTREE_VALID_METRICS, _as_sample_matrix
 
 from ._druhg_tree import UniversalReciprocity
-from . import _druhg_tree_logging as _tree_logging
 from ._druhg_label import Clusterizer
 from ._druhg_displacement import develop
 from .plots import ClusterTree
@@ -378,7 +377,6 @@ def druhg(X, max_ranking=16,
     printout, core_n_jobs, max_ranking, limitL, limitH = _check_input(
         X, core_n_jobs, max_ranking, leaf_size, metric, p, size_range, limitL, limitH)
     progress_interval = _resolve_progress_interval(progress_interval)
-    jupyter_progress = _tree_logging.try_jupyter_progress()
     if printout:
         logger.info('Druhg is using defaults for: ' + printout)
 
@@ -408,7 +406,6 @@ def druhg(X, max_ranking=16,
                                   buffer_ranks=buffers[Buffer.RANKS.value],
                                   buffer_edgepairs=buffers[Buffer.MST.value],
                                   progress_interval=progress_interval,
-                                  jupyter_progress=jupyter_progress,
                                   **kwargs)
     except KeyboardInterrupt:
         logger.warning(

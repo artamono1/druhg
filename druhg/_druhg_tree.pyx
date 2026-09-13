@@ -179,10 +179,9 @@ cdef class UniversalReciprocity (object):
                  buffer_ranks=None, buffer_edgepairs=None,
                  buffer_clusters=None,
                  progress_interval=None,
-                 jupyter_progress=None,
                  **kwargs):
 
-        self.log = TreeLogging(jupyter_progress)
+        self.log = TreeLogging()
         self.logger = self.log.logger
         self.logger_debug = self.log.debug_enabled
 
@@ -282,7 +281,8 @@ cdef class UniversalReciprocity (object):
         self.log.finish_mst(
             self.interrupted, self.interrupt_reason,
             self.result_edges, self.num_points,
-            edge_cases, self.max_neighbors_search)
+            edge_cases, self.max_neighbors_search,
+            time.monotonic() - self.t0)
         if self.result_edges != self.num_points - 1:
             self._finalize_incomplete_tree()
 
