@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """MST progress and interrupt logging for spanning-tree construction."""
 
-# Author: Pavel Artamonov
+# Author: AI generated
 # License: 3-clause BSD
 
 import html
