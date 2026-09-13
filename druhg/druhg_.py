@@ -10,7 +10,6 @@ It is most natural clusterization and requires ZERO parameters.
 # License: 3-clause BSD
 
 import copy
-import html
 import logging
 import argparse
 import time
@@ -25,6 +24,7 @@ from joblib.parallel import cpu_count
 from ._druhg_neighbors import KDTree, BallTree, KDTREE_VALID_METRICS, BALLTREE_VALID_METRICS, _as_sample_matrix
 
 from ._druhg_tree import UniversalReciprocity
+from . import _druhg_tree_logging as _tree_logging
 from ._druhg_label import Clusterizer
 from ._druhg_displacement import develop
 from .plots import ClusterTree
@@ -179,54 +179,6 @@ def _resolve_progress_interval(progress_interval):
     if progress_interval == 0:
         return None
     return progress_interval
-
-
-def _in_jupyter_shell():
-    try:
-        from IPython import get_ipython
-    except ImportError:
-        return False
-    ip = get_ipython()
-    if ip is None:
-        return False
-    name = ip.__class__.__name__
-    if name == 'TerminalInteractiveShell':
-        return False
-    if name == 'ZMQInteractiveShell':
-        return True
-    module = type(ip).__module__
-    if 'colab' in module or 'ipykernel' in module:
-        return True
-    config = getattr(ip, 'config', None)
-    try:
-        return bool(config and 'IPKernelApp' in config)
-    except Exception:
-        return False
-
-
-class _JupyterProgress(object):
-    """One updatable output in a notebook. IPython is imported lazily."""
-
-    def __init__(self):
-        self._handle = None
-
-    def write(self, msg):
-        from IPython.display import HTML, display
-        payload = HTML(
-            '<pre style="margin:0">%s</pre>' % html.escape(str(msg), quote=False))
-        if self._handle is None:
-            self._handle = display(payload, display_id=True)
-        else:
-            self._handle.update(payload)
-
-    def close(self):
-        self._handle = None
-
-
-def _try_jupyter_progress():
-    if not _in_jupyter_shell():
-        return None
-    return _JupyterProgress()
 
 
 def _drain_keyboard_interrupt():
@@ -458,7 +410,7 @@ def druhg(X, max_ranking=16,
         X, core_n_jobs, max_ranking, leaf_size, metric, p, size_range, limitL, limitH)
     timeout, max_edges = _resolve_mst_limits(timeout, max_edges)
     progress_interval = _resolve_progress_interval(progress_interval)
-    jupyter_progress = _try_jupyter_progress() if progress_interval else None
+    jupyter_progress = _tree_logging.try_jupyter_progress() if progress_interval else None
     if printout:
         logger.info('Druhg is using defaults for: ' + printout)
 

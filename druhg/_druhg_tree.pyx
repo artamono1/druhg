@@ -14,10 +14,10 @@
 import numpy as np
 cimport numpy as np
 import sys
-import os
-import shutil
 import time
 import logging
+
+from ._druhg_tree_logging import TreeLogging
 
 cdef extern from "Python.h":
     int PyErr_CheckSignals() except -1
@@ -165,6 +165,7 @@ cdef class UniversalReciprocity (object):
         np.ndarray result_rank_arr
         bint logger_debug
         object logger
+        object log
 
         np.double_t timeout
         np.double_t t0
@@ -174,10 +175,7 @@ cdef class UniversalReciprocity (object):
         bint interrupted
         bint warned_timeout
         bint warned_max_edges
-        bint progress_line_open
-        np.intp_t progress_line_width
         object interrupt_reason
-        object jupyter_progress
 
     def __init__(self, algorithm, tree,
                  buffer_uf, buffer_fast, buffer_values,
@@ -188,8 +186,9 @@ cdef class UniversalReciprocity (object):
                  jupyter_progress=None,
                  **kwargs):
 
-        self.logger = logging.getLogger(__package__)
-        self.logger_debug = self.logger.isEnabledFor(logging.DEBUG)
+        self.log = TreeLogging(jupyter_progress)
+        self.logger = self.log.logger
+        self.logger_debug = self.log.debug_enabled
 
         self.PRECISION = kwargs.get('double_precision', 0.0000001)  # relevant if distances are tiny
         self.n_jobs = n_jobs
@@ -228,10 +227,7 @@ cdef class UniversalReciprocity (object):
         self.interrupted = 0
         self.warned_timeout = 0
         self.warned_max_edges = 0
-        self.progress_line_open = 0
-        self.progress_line_width = 0
         self.interrupt_reason = None
-        self.jupyter_progress = jupyter_progress
         self.t0 = 0.
         self.t_last_progress = 0.
 
@@ -273,135 +269,22 @@ cdef class UniversalReciprocity (object):
         return self.result_values_arr, self.U.parent_arr
 
     cdef void _end_progress_line(self) except *:
-        if self.jupyter_progress is not None:
-            try:
-                self.jupyter_progress.close()
-            except Exception:
-                pass
-        if not self.progress_line_open:
-            return
-        if self._stderr_is_tty():
-            sys.stderr.write('\n')
-            sys.stderr.flush()
-        self.progress_line_open = 0
-        self.progress_line_width = 0
-
-    cdef bint _stderr_is_tty(self):
-        try:
-            if sys.stderr.isatty():
-                return 1
-        except Exception:
-            pass
-        try:
-            if os.isatty(sys.stderr.fileno()):
-                return 1
-        except Exception:
-            pass
-        return 0
-
-    cdef np.intp_t _tty_columns(self):
-        cdef np.intp_t cols
-        try:
-            cols = os.get_terminal_size(sys.stderr.fileno()).columns
-        except Exception:
-            try:
-                cols = shutil.get_terminal_size(fallback=(80, 24)).columns
-            except Exception:
-                cols = 80
-        if cols < 20:
-            cols = 20
-        return cols
-
-    cdef void _write_tty_status(self, msg) except *:
-        cdef np.intp_t cols
-        cols = self._tty_columns()
-        if len(msg) >= cols:
-            msg = msg[:cols - 1]
-        # One visual row: disable wrap, CR, erase line. A wrapped
-        # status makes \\r look like spam in Alacritty.
-        sys.stderr.write('\033[?7l\r\033[2K' + msg + '\033[?7h')
-        sys.stderr.flush()
-        self.progress_line_open = 1
-        self.progress_line_width = len(msg)
-
-    cdef void _write_jupyter_status(self, msg) except *:
-        try:
-            self.jupyter_progress.write(msg)
-        except Exception:
-            self.logger.warning('%s', msg)
-            return
-        self.progress_line_open = 1
-
-    cdef void _write_inplace_status(self, msg) except *:
-        if self._stderr_is_tty():
-            self._write_tty_status(msg)
-            return
-        if self.jupyter_progress is not None:
-            self._write_jupyter_status(msg)
+        self.log.end_progress_line()
 
     cdef void _note_interrupt(self, reason) except *:
-        cdef np.intp_t total
         if self.interrupted:
             return
         self.interrupted = 1
         self.interrupt_reason = reason
-        self._end_progress_line()
-        total = self.num_points - 1
-        if total < 1:
-            total = 1
-        self.logger.warning(
-            'MSTree formation: interruption started (%s) after %s edges %.2f%% of %s.',
-            reason,
-            self.result_edges,
-            100. * self.result_edges / total,
-            total)
+        self.log.note_interrupt(reason, self.result_edges, self.num_points)
 
     cdef void _prompt_limit(self, reason) except *:
-        cdef np.intp_t total
-        total = self.num_points - 1
-        if total < 1:
-            total = 1
-        self._end_progress_line()
-        self.logger.warning(
-            'MSTree formation: %s limit reached after %s edges %.2f%% of %s. '
-            'Ctrl+C to stop MST and continue labeling, or wait to keep building.',
-            reason,
-            self.result_edges,
-            100. * self.result_edges / total,
-            total)
+        self.log.prompt_limit(reason, self.result_edges, self.num_points)
         self.t_last_progress = time.monotonic()
 
     cdef void _prompt_progress(self) except *:
-        cdef np.intp_t total
-        cdef object msg, log_msg
-        total = self.num_points - 1
-        if total < 1:
-            total = 1
-        log_msg = (
-            'MSTree formation: %s edges %.2f%% of %s after %.1fs. Still working. '
-            'Ctrl+C to stop MST and continue labeling, or wait to keep building.'
-            % (self.result_edges,
-               100. * self.result_edges / total,
-               total,
-               time.monotonic() - self.t0)
-        )
-        if self._stderr_is_tty():
-            msg = 'MSTree formation: %s/%s edges (%.1f%%) %.1fs  Ctrl+C stops MST' % (
-                self.result_edges, total,
-                100. * self.result_edges / total,
-                time.monotonic() - self.t0)
-            self._write_inplace_status(msg)
-            self.t_last_progress = time.monotonic()
-            return
-        if self.jupyter_progress is not None:
-            msg = 'MSTree formation: %s/%s edges (%.1f%%) %.1fs  Interrupt kernel stops MST' % (
-                self.result_edges, total,
-                100. * self.result_edges / total,
-                time.monotonic() - self.t0)
-            self._write_inplace_status(msg)
-            self.t_last_progress = time.monotonic()
-            return
-        self.logger.warning('%s', log_msg)
+        self.log.prompt_progress(
+            self.result_edges, self.num_points, time.monotonic() - self.t0)
         self.t_last_progress = time.monotonic()
 
     cdef bint _should_stop_mst(self) except -1:
@@ -433,40 +316,12 @@ cdef class UniversalReciprocity (object):
         self.result_values_arr[self.result_edges] = -1
 
     cdef void _finish_mst(self, np.intp_t edge_cases) except *:
-        cdef np.intp_t total
-        total = self.num_points - 1
-        if total < 1:
-            total = 1
-        self._end_progress_line()
-        if self.interrupted:
-            if self.result_edges >= total:
-                self.logger.warning(
-                    'MSTree formation: interruption result: %s edges %.2f%% of %s (%s). Tree complete.',
-                    self.result_edges,
-                    100. * self.result_edges / total,
-                    total,
-                    self.interrupt_reason)
-            else:
-                self.logger.warning(
-                    'MSTree formation: interruption result: %s edges %.2f%% of %s (%s). '
-                    'Partial forest. Continuing to labeling.',
-                    self.result_edges,
-                    100. * self.result_edges / total,
-                    total,
-                    self.interrupt_reason)
-        else:
-            self.logger.info(
-                'MSTree formation: %s edges %.2f%%. Done.',
-                self.result_edges, 100. * self.result_edges / self.num_points)
+        self.log.finish_mst(
+            self.interrupted, self.interrupt_reason,
+            self.result_edges, self.num_points,
+            edge_cases, self.max_neighbors_search)
         if self.result_edges != self.num_points - 1:
-            self.logger.info('%s not connected edges of %s. It is a forest. Try increasing max_neighbors(max_ranking) value %s for a better result.',
-                self.num_points - 1 - self.result_edges, self.num_points - 1, self.max_neighbors_search)
             self._finalize_incomplete_tree()
-
-        if self.max_neighbors_search < self.num_points - 1 and edge_cases != 0:
-            # todo: may be check the actual reachability of indices?
-            self.logger.info('%s edges with the max rank. Try increasing max_neighbors(max_ranking) value %s or pick the square mode (not available yet).',
-                edge_cases, self.max_neighbors_search)
 
     cdef void result_write(self, np.double_t v, np.intp_t a, np.intp_t b, np.double_t r):
         cdef np.intp_t i
@@ -651,25 +506,16 @@ cdef class UniversalReciprocity (object):
             list heap
 
         edge_cases = 0
-        if self.num_points >= 1000:
-            self.logger.warning(
-                'kNN querying: %s neighbors for %s points. '
-                'Ctrl+C after this step stops MST and continues labeling.',
-                self.max_neighbors_search, self.num_points)
-            if self.progress_interval > 0.:
-                self._write_inplace_status(
-                    'kNN querying: blocking, no ticks until neighbors return')
-        else:
-            self.logger.info('kNN querying: %s neighbors for %s points.',
-                             self.max_neighbors_search, self.num_points)
+        self.log.knn_query_start(
+            self.max_neighbors_search, self.num_points,
+            self.progress_interval > 0.)
         knn_dist, knn_indices = self.dist_tree.query(
                     self.tree.data,
                     k=self.max_neighbors_search,
                     dualtree=True,
                     breadth_first=True,
                     )
-        self._end_progress_line()
-        self.logger.info('kNN querying: done')
+        self.log.knn_query_done()
         self._should_stop_mst()
 
         heap = []

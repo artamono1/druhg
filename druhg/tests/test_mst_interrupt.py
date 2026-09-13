@@ -113,7 +113,7 @@ class _FakeJupyterProgress(object):
 
 def test_progress_inplace_in_jupyter(monkeypatch, caplog):
     fake = _FakeJupyterProgress()
-    monkeypatch.setattr('druhg.druhg_._try_jupyter_progress', lambda: fake)
+    monkeypatch.setattr('druhg._druhg_tree_logging.try_jupyter_progress', lambda: fake)
     X = _blob(n=50)
     caplog.set_level(logging.WARNING, logger='druhg')
     dr = DRUHG(progress_interval=1e-15, limitL=1, limitH=50, verbose=False)
@@ -128,7 +128,7 @@ def test_progress_inplace_in_jupyter(monkeypatch, caplog):
 
 def test_jupyter_progress_skipped_on_tty(monkeypatch, capsys, caplog):
     fake = _FakeJupyterProgress()
-    monkeypatch.setattr('druhg.druhg_._try_jupyter_progress', lambda: fake)
+    monkeypatch.setattr('druhg._druhg_tree_logging.try_jupyter_progress', lambda: fake)
     monkeypatch.setattr(sys.stderr, 'isatty', lambda: True)
     X = _blob(n=50)
     caplog.set_level(logging.WARNING, logger='druhg')
@@ -141,7 +141,7 @@ def test_jupyter_progress_skipped_on_tty(monkeypatch, capsys, caplog):
 
 
 def test_try_jupyter_progress_requires_notebook_shell(monkeypatch):
-    from druhg.druhg_ import _try_jupyter_progress
+    from druhg._druhg_tree_logging import try_jupyter_progress
 
     class TerminalInteractiveShell(object):
         pass
@@ -150,7 +150,7 @@ def test_try_jupyter_progress_requires_notebook_shell(monkeypatch):
         pass
 
     monkeypatch.setattr('IPython.get_ipython', lambda: TerminalInteractiveShell())
-    assert _try_jupyter_progress() is None
+    assert try_jupyter_progress() is None
 
     captured = []
 
@@ -164,7 +164,7 @@ def test_try_jupyter_progress_requires_notebook_shell(monkeypatch):
 
     monkeypatch.setattr('IPython.get_ipython', lambda: ZMQInteractiveShell())
     monkeypatch.setattr('IPython.display.display', fake_display)
-    prog = _try_jupyter_progress()
+    prog = try_jupyter_progress()
     assert prog is not None
     prog.write('hello')
     prog.write('world')
