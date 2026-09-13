@@ -294,14 +294,15 @@ def druhg(X, max_ranking=16,
         and motion. Used by ``DRUHG.fit_tree``.
 
     timeout : float, optional (default=None)
-        Seconds allowed for MST construction, including the initial
-        neighbor query. ``None`` or ``0`` means no time limit.
-        When the budget is hit, the partial forest is labeled as-is.
+        After this many seconds of MST construction (including the
+        initial neighbor query), log the current edge count and
+        percentage and keep building. ``None`` or ``0`` means no
+        reminder. Ctrl+C then stops the MST and continues to labeling.
 
     max_edges : int, optional (default=None)
-        Stop MST construction after this many edges and continue to
-        labeling. ``None`` builds until the tree is complete or
-        neighbor limits are exhausted.
+        After this many MST edges, log the current edge count and
+        percentage and keep building. ``None`` means no reminder.
+        Ctrl+C then stops the MST and continues to labeling.
 
     size_range : [float, float], optional (default=[sqrt(size), size/2])
         Clusters that are smaller or bigger than this limit treated as noise.
@@ -712,8 +713,9 @@ class DRUHG(BaseEstimator, ClusterMixin):
     def fit_tree(self, X, y=None):
         """Build the DRUHG spanning tree only.
 
-        Ctrl+C, ``timeout``, and ``max_edges`` apply here. Labeling is
-        left to ``label()`` / ``relabel()`` / ``fit()``.
+        ``timeout`` and ``max_edges`` remind once when reached; Ctrl+C
+        stops the MST. Labeling is left to ``label()`` / ``relabel()``
+        / ``fit()``.
 
         Parameters
         ----------
@@ -743,8 +745,9 @@ class DRUHG(BaseEstimator, ClusterMixin):
     def fit(self, X, y=None):
         """Perform DRUHG clustering.
 
-        An interrupt during MST construction (Ctrl+C, ``timeout``,
-        ``max_edges``) keeps the partial forest and still runs labeling.
+        ``timeout`` and ``max_edges`` log a status reminder and keep
+        building. Ctrl+C during MST construction keeps the partial
+        forest and still runs labeling.
 
         Parameters
         ----------

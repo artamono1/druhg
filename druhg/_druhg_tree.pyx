@@ -168,6 +168,8 @@ cdef class UniversalReciprocity (object):
         np.double_t t0
         np.intp_t max_edges_limit
         bint interrupted
+        bint warned_timeout
+        bint warned_max_edges
         object interrupt_reason
 
     def __init__(self, algorithm, tree,
@@ -211,6 +213,8 @@ cdef class UniversalReciprocity (object):
         if max_edges is not None and int(max_edges) > 0:
             self.max_edges_limit = int(max_edges)
         self.interrupted = 0
+        self.warned_timeout = 0
+        self.warned_max_edges = 0
         self.interrupt_reason = None
         self.t0 = 0.
 
@@ -257,15 +261,29 @@ cdef class UniversalReciprocity (object):
         self.interrupted = 1
         self.interrupt_reason = reason
 
+    cdef void _prompt_limit(self, reason) except *:
+        cdef np.intp_t total
+        total = self.num_points - 1
+        if total < 1:
+            total = 1
+        self.logger.warning(
+            'MSTree formation: %s limit reached after %s edges %.2f%% of %s. '
+            'Ctrl+C to stop MST and continue labeling, or wait to keep building.',
+            reason,
+            self.result_edges,
+            100. * self.result_edges / total,
+            total)
+
     cdef bint _should_stop_mst(self) except -1:
-        if self.result_edges >= self.num_points - 1:
-            return 0
-        if self.max_edges_limit > 0 and self.result_edges >= self.max_edges_limit:
-            self._note_interrupt('max_edges')
-            return 1
-        if self.timeout > 0. and (time.monotonic() - self.t0) >= self.timeout:
-            self._note_interrupt('timeout')
-            return 1
+        if self.result_edges < self.num_points - 1:
+            if (self.max_edges_limit > 0 and self.result_edges >= self.max_edges_limit
+                    and not self.warned_max_edges):
+                self.warned_max_edges = 1
+                self._prompt_limit('max_edges')
+            if (self.timeout > 0. and (time.monotonic() - self.t0) >= self.timeout
+                    and not self.warned_timeout):
+                self.warned_timeout = 1
+                self._prompt_limit('timeout')
         PyErr_CheckSignals()
         return 0
 
@@ -277,7 +295,7 @@ cdef class UniversalReciprocity (object):
             self.result_pairs_arr[2 * self.result_edges + 1] = -1
         self.result_values_arr[self.result_edges] = -1
 
-    cdef void _finish_mst(self, np.intp_t edge_cases):
+    cdef void _finish_mst(self, np.intp_t edge_cases) except *:
         if self.interrupted:
             self.logger.info(
                 'MSTree formation: interrupted after %s edges %.2f%% (%s).',
@@ -458,7 +476,11 @@ cdef class UniversalReciprocity (object):
         except KeyboardInterrupt:
             if self.result_edges < self.num_points - 1:
                 self._note_interrupt('KeyboardInterrupt')
-        self._finish_mst(edge_cases)
+        try:
+            self._finish_mst(edge_cases)
+        except KeyboardInterrupt:
+            if self.result_edges < self.num_points - 1:
+                self._note_interrupt('KeyboardInterrupt')
 
     cdef np.intp_t _form_mst(self) except -1:
         # DRUHG
@@ -467,7 +489,6 @@ cdef class UniversalReciprocity (object):
         cdef:
             np.intp_t i, \
                 warn, infinitesimal, edge_cases
-            bint stop
 
             Relation rel = Relation(0,0,0,0, 0,0)
 
@@ -477,7 +498,6 @@ cdef class UniversalReciprocity (object):
             list heap
 
         edge_cases = 0
-        stop = 0
         self.logger.info(f'kNN querying: %s', self.max_neighbors_search)
         knn_dist, knn_indices = self.dist_tree.query(
                     self.tree.data,
@@ -486,8 +506,7 @@ cdef class UniversalReciprocity (object):
                     breadth_first=True,
                     )
         self.logger.info('kNN querying: done')
-        if self._should_stop_mst():
-            return edge_cases
+        self._should_stop_mst()
 
         heap = []
 #### Initialization and pure reciprocity (ranks equal)
@@ -497,9 +516,7 @@ cdef class UniversalReciprocity (object):
         # if self.tree.data.shape[0] > 16384 and self.n_jobs > 1: # multicore 2-3x speed up for big datasets
         i = self.num_points
         while i:
-            if self._should_stop_mst():
-                stop = 1
-                break
+            self._should_stop_mst()
             i -= 1
             if knn_dist[i][0] < 0.:
                 self.logger.error('Distances cannot be negative! Exiting. '+str(i)+' '+str(knn_dist[i][0]))
@@ -524,8 +541,6 @@ cdef class UniversalReciprocity (object):
         if self.result_edges >= self.num_points - 1:
             self.logger.info('Two subjects only')
             return edge_cases
-        if stop:
-            return edge_cases
         if warn > 0:
             self.logger.info(
             'A lot of values('+str(warn)+') are the same. Try increasing max_neighbors_search('+str(self.max_neighbors_search)+
@@ -538,8 +553,7 @@ cdef class UniversalReciprocity (object):
         self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with complex connections.')
 ############
         while self.result_edges < self.num_points - 1 and heap:
-            if self._should_stop_mst():
-                break
+            self._should_stop_mst()
             rel.reciprocity, i, rel.endpoint, rel.max_rank = heapq.heappop(heap)
 
             p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
