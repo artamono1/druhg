@@ -27,6 +27,8 @@ class CustomBuildExtCommand(build_ext):
 
 _druhg_unionfind = Extension('druhg._druhg_unionfind',
                          sources=['druhg/_druhg_unionfind.pyx'])
+_druhg_pairwise = Extension('druhg._druhg_pairwise',
+                         sources=['druhg/_druhg_pairwise.pyx'])
 _druhg_tree = Extension('druhg._druhg_tree',
                          sources=['druhg/_druhg_tree.pyx'])
 _druhg_group = Extension('druhg._druhg_group',
@@ -49,7 +51,7 @@ def requirements():
 
 configuration = {
     'name': 'druhg',
-    'version': '1.8.3',
+    'version': '1.8.4',
     'description': 'Universal clustering based on dialectical materialism',
     'long_description': readme(),
     'long_description_content_type': 'text/x-rst',
@@ -78,6 +80,7 @@ configuration = {
     'python_requires': '>=3.10',
     'ext_modules': [
                     _druhg_unionfind,
+                    _druhg_pairwise,
                     _druhg_tree,
                     _druhg_group,
                     _druhg_label,
