@@ -1,5 +1,6 @@
 """Tests for interrupting MST construction and labeling the partial forest."""
 import logging
+import sys
 
 import numpy as np
 import pytest
@@ -80,6 +81,22 @@ def test_progress_interval_prompts_and_continues(caplog):
     assert 'Still working' in caplog.text
     assert '% of 49' in caplog.text
     assert 'Ctrl+C' in caplog.text
+
+
+def test_progress_inplace_on_tty(capsys, monkeypatch, caplog):
+    monkeypatch.setattr(sys.stderr, 'isatty', lambda: True)
+    X = _blob(n=50)
+    caplog.set_level(logging.WARNING, logger='druhg')
+    dr = DRUHG(progress_interval=1e-15, limitL=1, limitH=50, verbose=False)
+    dr.fit(X)
+
+    err = capsys.readouterr().err
+    assert '\r' in err
+    assert '\033[2K' in err
+    assert 'Ctrl+C stops MST' in err
+    assert 'Still working' not in err
+    assert 'Still working' not in caplog.text
+    assert dr.num_edges_ == 49
 
 
 def test_knn_start_warns_on_large_input(caplog):

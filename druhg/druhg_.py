@@ -328,10 +328,12 @@ def druhg(X, max_ranking=16,
         Ctrl+C then stops the MST and continues to labeling.
 
     progress_interval : float, optional (default=5)
-        Seconds between MST status lines (edge count, percentage,
+        Seconds between MST status updates (edge count, percentage,
         elapsed time). Visible even when ``verbose=False``, so a large
-        input does not look frozen. ``None`` uses the default. ``0``
-        disables the heartbeat.
+        input does not look frozen. On a terminal, the heartbeat
+        overwrites one line; in Jupyter, pipes, and log files it is a
+        new warning line. ``None`` uses the default. ``0`` disables
+        the heartbeat.
 
     size_range : [float, float], optional (default=[sqrt(size), size/2])
         Clusters that are smaller or bigger than this limit treated as noise.
@@ -470,11 +472,6 @@ def druhg(X, max_ranking=16,
         precision=precision, run_motion=not do_labeling)
 
     if do_tree_only:
-        if buffers.get(Buffer.INTERRUPTED.value) is not None:
-            logger.warning(
-                'Interruption result: spanning tree only, %s of %s edges (%s). '
-                'Call label() to assign clusters.',
-                num_edges, max(size - 1, 0), buffers[Buffer.INTERRUPTED.value])
         return buffers, num_edges
 
     if do_labeling:
@@ -482,12 +479,6 @@ def druhg(X, max_ranking=16,
             buffers[Buffer.LABELS.value],
             exclude=exclude, size_range=[int(limitL), int(limitH)],
             fix_outliers=fix_outliers, edgepairs_arr=buffers[Buffer.MST.value], **kwargs)
-        if buffers.get(Buffer.INTERRUPTED.value) is not None:
-            logger.warning(
-                'Interruption result: labeled %s points from a partial forest '
-                '(%s of %s edges, %s).',
-                size, num_edges, max(size - 1, 0),
-                buffers[Buffer.INTERRUPTED.value])
         return buffers, num_edges
 
     buffers[Buffer.OUTPUT.value] = develop(
