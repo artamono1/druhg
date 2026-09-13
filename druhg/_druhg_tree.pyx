@@ -14,7 +14,11 @@
 import numpy as np
 cimport numpy as np
 import sys
+import time
 import logging
+
+cdef extern from "Python.h":
+    int PyErr_CheckSignals() except -1
 
 from ._druhg_unionfind import UnionFind
 from ._druhg_unionfind cimport UnionFind
@@ -160,11 +164,18 @@ cdef class UniversalReciprocity (object):
         bint logger_debug
         object logger
 
+        np.double_t timeout
+        np.double_t t0
+        np.intp_t max_edges_limit
+        bint interrupted
+        object interrupt_reason
+
     def __init__(self, algorithm, tree,
                  buffer_uf, buffer_fast, buffer_values,
                  max_neighbors_search=16, metric='euclidean', leaf_size=20, n_jobs=4,
                  buffer_ranks=None, buffer_edgepairs=None,
                  buffer_clusters=None,
+                 timeout=None, max_edges=None,
                  **kwargs):
 
         self.logger = logging.getLogger(__package__)
@@ -190,6 +201,18 @@ cdef class UniversalReciprocity (object):
             raise ValueError('algorithm value '+str(algorithm)+' is not valid')
 
         self.max_neighbors_search = max_neighbors_search
+
+        self.timeout = 0.
+        if timeout is not None:
+            t = float(timeout)
+            if t > 0.:
+                self.timeout = t
+        self.max_edges_limit = 0
+        if max_edges is not None and int(max_edges) > 0:
+            self.max_edges_limit = int(max_edges)
+        self.interrupted = 0
+        self.interrupt_reason = None
+        self.t0 = 0.
 
         self.U = UnionFind(self.num_points, buffer_uf, buffer_fast)
         self.U.nullify()
@@ -219,8 +242,61 @@ cdef class UniversalReciprocity (object):
     cpdef np.intp_t get_num_edges(self): # Small k-nn can result in missing edges
         return self.result_edges
 
+    cpdef bint was_interrupted(self):
+        return self.interrupted
+
+    cpdef object get_interrupt_reason(self):
+        return self.interrupt_reason
+
     cpdef tuple get_buffers(self):
         return self.result_values_arr, self.U.parent_arr
+
+    cdef void _note_interrupt(self, reason):
+        if self.interrupted:
+            return
+        self.interrupted = 1
+        self.interrupt_reason = reason
+
+    cdef bint _should_stop_mst(self) except -1:
+        if self.result_edges >= self.num_points - 1:
+            return 0
+        if self.max_edges_limit > 0 and self.result_edges >= self.max_edges_limit:
+            self._note_interrupt('max_edges')
+            return 1
+        if self.timeout > 0. and (time.monotonic() - self.t0) >= self.timeout:
+            self._note_interrupt('timeout')
+            return 1
+        PyErr_CheckSignals()
+        return 0
+
+    cdef void _finalize_incomplete_tree(self):
+        if self.result_edges >= self.num_points - 1:
+            return
+        if self.result_pairs_arr is not None:
+            self.result_pairs_arr[2 * self.result_edges] = -1
+            self.result_pairs_arr[2 * self.result_edges + 1] = -1
+        self.result_values_arr[self.result_edges] = -1
+
+    cdef void _finish_mst(self, np.intp_t edge_cases):
+        if self.interrupted:
+            self.logger.info(
+                'MSTree formation: interrupted after %s edges %.2f%% (%s).',
+                self.result_edges,
+                100. * self.result_edges / self.num_points,
+                self.interrupt_reason)
+        else:
+            self.logger.info(
+                'MSTree formation: %s edges %.2f%%. Done.',
+                self.result_edges, 100. * self.result_edges / self.num_points)
+        if self.result_edges != self.num_points - 1:
+            self.logger.info('%s not connected edges of %s. It is a forest. Try increasing max_neighbors(max_ranking) value %s for a better result.',
+                self.num_points - 1 - self.result_edges, self.num_points - 1, self.max_neighbors_search)
+            self._finalize_incomplete_tree()
+
+        if self.max_neighbors_search < self.num_points - 1 and edge_cases != 0:
+            # todo: may be check the actual reachability of indices?
+            self.logger.info('%s edges with the max rank. Try increasing max_neighbors(max_ranking) value %s or pick the square mode (not available yet).',
+                edge_cases, self.max_neighbors_search)
 
     cdef void result_write(self, np.double_t v, np.intp_t a, np.intp_t b, np.double_t r):
         cdef np.intp_t i
@@ -372,13 +448,26 @@ cdef class UniversalReciprocity (object):
         rel.reciprocity = best
         return res
 
-    cdef _compute_tree_edges(self):
+    cdef void _compute_tree_edges(self) except *:
+        cdef np.intp_t edge_cases
+
+        edge_cases = 0
+        self.t0 = time.monotonic()
+        try:
+            edge_cases = self._form_mst()
+        except KeyboardInterrupt:
+            if self.result_edges < self.num_points - 1:
+                self._note_interrupt('KeyboardInterrupt')
+        self._finish_mst(edge_cases)
+
+    cdef np.intp_t _form_mst(self) except -1:
         # DRUHG
         # computes DRUHG Spanning Tree
         # uses heap
         cdef:
             np.intp_t i, \
-                warn, infinitesimal
+                warn, infinitesimal, edge_cases
+            bint stop
 
             Relation rel = Relation(0,0,0,0, 0,0)
 
@@ -387,6 +476,8 @@ cdef class UniversalReciprocity (object):
 
             list heap
 
+        edge_cases = 0
+        stop = 0
         self.logger.info(f'kNN querying: %s', self.max_neighbors_search)
         knn_dist, knn_indices = self.dist_tree.query(
                     self.tree.data,
@@ -395,6 +486,8 @@ cdef class UniversalReciprocity (object):
                     breadth_first=True,
                     )
         self.logger.info('kNN querying: done')
+        if self._should_stop_mst():
+            return edge_cases
 
         heap = []
 #### Initialization and pure reciprocity (ranks equal)
@@ -404,10 +497,13 @@ cdef class UniversalReciprocity (object):
         # if self.tree.data.shape[0] > 16384 and self.n_jobs > 1: # multicore 2-3x speed up for big datasets
         i = self.num_points
         while i:
+            if self._should_stop_mst():
+                stop = 1
+                break
             i -= 1
             if knn_dist[i][0] < 0.:
                 self.logger.error('Distances cannot be negative! Exiting. '+str(i)+' '+str(knn_dist[i][0]))
-                return
+                return edge_cases
             if self._pure_reciprocity(i, knn_indices, knn_dist, &rel, &infinitesimal):
                 self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank - 1)
                 p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
@@ -427,7 +523,9 @@ cdef class UniversalReciprocity (object):
 
         if self.result_edges >= self.num_points - 1:
             self.logger.info('Two subjects only')
-            return
+            return edge_cases
+        if stop:
+            return edge_cases
         if warn > 0:
             self.logger.info(
             'A lot of values('+str(warn)+') are the same. Try increasing max_neighbors_search('+str(self.max_neighbors_search)+
@@ -438,9 +536,10 @@ cdef class UniversalReciprocity (object):
                    ') level. Try decreasing double_precision parameter.')
 
         self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with complex connections.')
-        edge_cases = 0
 ############
         while self.result_edges < self.num_points - 1 and heap:
+            if self._should_stop_mst():
+                break
             rel.reciprocity, i, rel.endpoint, rel.max_rank = heapq.heappop(heap)
 
             p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
@@ -452,19 +551,5 @@ cdef class UniversalReciprocity (object):
 
             if self._evaluate_reciprocity(i, p, knn_indices, knn_dist, &rel):
                 heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
-###############
-        self.logger.info(
-            'MSTree formation: %s edges %.2f%%. Done.',
-            self.result_edges, 100. * self.result_edges / self.num_points)
-        if self.result_edges != self.num_points - 1:
-            self.logger.info('%s not connected edges of %s. It is a forest. Try increasing max_neighbors(max_ranking) value %s for a better result.',
-                self.num_points - 1 - self.result_edges, self.num_points - 1, self.max_neighbors_search)
-            if self.result_pairs_arr is not None:
-                self.result_pairs_arr[2 * self.result_edges] = -1
-                self.result_pairs_arr[2 * self.result_edges + 1] = -1
-            self.result_values_arr[self.result_edges] = -1
 
-        if self.max_neighbors_search < self.num_points - 1 and edge_cases != 0:
-            # todo: may be check the actual reachability of indices?
-            self.logger.info('%s edges with the max rank. Try increasing max_neighbors(max_ranking) value %s or pick the square mode (not available yet).',
-                edge_cases, self.max_neighbors_search)
+        return edge_cases
