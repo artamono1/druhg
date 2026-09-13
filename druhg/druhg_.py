@@ -12,6 +12,7 @@ It is most natural clusterization and requires ZERO parameters.
 import copy
 import logging
 import argparse
+import time
 from enum import Enum
 
 import numpy as np
@@ -41,6 +42,7 @@ Buffer = Enum('Buffer', [
     ('LABELS', 30), ('CLUSTERS', 31), ('SIZES', 32),
     ('DATA0', 50), ('DATA1', 51),
     ('OUTPUT', 100), ('MST', 101), ('RANKS', 102),
+    ('INTERRUPTED', 103),
 ])
 
 
@@ -144,6 +146,28 @@ def _check_input(X, core_n_jobs, max_ranking, leaf_size, metric, p,
     return printout, core_n_jobs, max_ranking, limitL, limitH
 
 
+def _resolve_progress_interval(progress_interval):
+    if progress_interval is None:
+        return 30.0
+    try:
+        progress_interval = float(progress_interval)
+    except (TypeError, ValueError):
+        raise ValueError('progress_interval must be a number of seconds!')
+    if progress_interval < 0:
+        raise ValueError('progress_interval must be non-negative!')
+    if progress_interval == 0:
+        return None
+    return progress_interval
+
+
+def _drain_keyboard_interrupt():
+    """Drop a leftover Ctrl+C from MST stop so O(n) labeling always finishes."""
+    try:
+        time.sleep(0)
+    except KeyboardInterrupt:
+        pass
+
+
 def _coerce_feature_array(X, algorithm, metric):
     """Interpret a 1-d vector as n samples with one feature."""
     if type(X) is list:
@@ -241,6 +265,8 @@ def _parsing_setup():
 
 def druhg(X, max_ranking=16,
           do_labeling=True,
+          do_tree_only=False,
+          progress_interval=None,
           size_range=None,
           limitL=None, limitH=None,
           exclude=None, fix_outliers=False,
@@ -265,6 +291,18 @@ def druhg(X, max_ranking=16,
 
     do_labeling : bool (default=True)
         It returns labels, otherwise new data point.
+
+    do_tree_only : bool (default=False)
+        Build the spanning tree (and emerge clusters) but skip labeling
+        and motion. Used by ``DRUHG.fit_tree``.
+
+    progress_interval : float, optional (default=30)
+        Seconds between MST status updates (edge count, percentage,
+        elapsed time). Visible even when ``verbose=False``, so a large
+        input does not look frozen. On a terminal the heartbeat
+        overwrites one line; in Jupyter it updates one output cell.
+        Pipes and log files get a new warning line. ``None`` uses the
+        default. ``0`` disables the heartbeat.
 
     size_range : [float, float], optional (default=[sqrt(size), size/2])
         Clusters that are smaller or bigger than this limit treated as noise.
@@ -338,6 +376,7 @@ def druhg(X, max_ranking=16,
 
     printout, core_n_jobs, max_ranking, limitL, limitH = _check_input(
         X, core_n_jobs, max_ranking, leaf_size, metric, p, size_range, limitL, limitH)
+    progress_interval = _resolve_progress_interval(progress_interval)
     if printout:
         logger.info('Druhg is using defaults for: ' + printout)
 
@@ -350,30 +389,53 @@ def druhg(X, max_ranking=16,
             logger.info('Converting data array to numpy float64')
             X = X.astype(np.float64)
 
-    tree, algo_code = _tune_treealgo(X, metric, algorithm, leaf_size, p=p, **kwargs)
-
     if fix_outliers and do_edges is not False:
         do_edges = True
 
     size = X.shape[0]
     buffers = _allocate_if_needed(buffers, size, do_edges, do_labeling)
 
-    ur = UniversalReciprocity(algo_code, tree,
-                              buffers[Buffer.UNIONFIND.value], buffers[Buffer.UNIONFIND_FAST.value],
-                              buffers[Buffer.VALUES.value],
-                              max_neighbors_search=max_ranking, metric=metric,
-                              leaf_size=leaf_size // 3, n_jobs=core_n_jobs,
-                              buffer_ranks=buffers[Buffer.RANKS.value],
-                              buffer_edgepairs=buffers[Buffer.MST.value],
-                              **kwargs)
+    ur = None
+    try:
+        tree, algo_code = _tune_treealgo(X, metric, algorithm, leaf_size, p=p, **kwargs)
+        ur = UniversalReciprocity(algo_code, tree,
+                                  buffers[Buffer.UNIONFIND.value], buffers[Buffer.UNIONFIND_FAST.value],
+                                  buffers[Buffer.VALUES.value],
+                                  max_neighbors_search=max_ranking, metric=metric,
+                                  leaf_size=leaf_size // 3, n_jobs=core_n_jobs,
+                                  buffer_ranks=buffers[Buffer.RANKS.value],
+                                  buffer_edgepairs=buffers[Buffer.MST.value],
+                                  progress_interval=progress_interval,
+                                  **kwargs)
+    except KeyboardInterrupt:
+        logger.warning(
+            'MSTree formation: interruption started (KeyboardInterrupt) before the spanning tree was built.')
 
-    num_edges = ur.get_num_edges()
+    if ur is not None:
+        num_edges = ur.get_num_edges()
+        buffers[Buffer.INTERRUPTED.value] = ur.get_interrupt_reason()
+    else:
+        num_edges = 0
+        buffers[Buffer.INTERRUPTED.value] = 'KeyboardInterrupt'
+        logger.warning(
+            'MSTree formation: interruption result: 0 of %s edges. '
+            'Spanning tree was not built.',
+            max(size - 1, 0))
+        _drain_keyboard_interrupt()
+        return buffers, num_edges
+
+
+    if buffers.get(Buffer.INTERRUPTED.value) is not None:
+        _drain_keyboard_interrupt()
 
     clusterizer = Clusterizer(buffers[Buffer.UNIONFIND.value], size, buffers[Buffer.VALUES.value], X,
                               buffers[Buffer.CLUSTERS.value], buffers[Buffer.SIZES.value], buffers[Buffer.GROUPS.value])
     precision = kwargs.get('double_precision2', kwargs.get('double_precision', 0))
     buffers[Buffer.CLUSTERS.value], buffers[Buffer.SIZES.value], buffers[Buffer.GROUPS.value] = clusterizer.emerge(
         precision=precision, run_motion=not do_labeling)
+
+    if do_tree_only:
+        return buffers, num_edges
 
     if do_labeling:
         buffers[Buffer.LABELS.value] = clusterizer.label(
@@ -386,7 +448,6 @@ def druhg(X, max_ranking=16,
         buffers[Buffer.VALUES.value], buffers[Buffer.UNIONFIND.value], size,
         buffers[Buffer.GROUPS.value], X, buffers[Buffer.SIZES.value], buffers[Buffer.CLUSTERS.value],
         buffers[Buffer.OUTPUT.value], **kwargs)
-
     return buffers, num_edges
 
 
@@ -610,6 +671,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
                  leaf_size=40,
                  verbose=False,
                  core_n_jobs=None,
+                 progress_interval=None,
                  **kwargs):
         self.max_ranking = max_ranking
         self.limitL = limitL
@@ -621,6 +683,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         self.verbose = verbose
         self.leaf_size = leaf_size
         self.core_n_jobs = core_n_jobs
+        self.progress_interval = progress_interval
         self._metric_kwargs = kwargs
 
         self._size = 0
@@ -633,9 +696,60 @@ class DRUHG(BaseEstimator, ClusterMixin):
         self.new_data_ = None
         self.buffers_ = None
         self.linkage_ = None
+        self.interrupted_ = False
+        self.interrupt_reason_ = None
+
+    def _store_tree_result(self, buffers, num_edges):
+        self.buffers_ = buffers
+        self.num_edges_ = num_edges
+        self.interrupt_reason_ = buffers.get(Buffer.INTERRUPTED.value)
+        self.interrupted_ = self.interrupt_reason_ is not None
+        self.values_ = buffers[Buffer.VALUES.value]
+        self.ranks_ = buffers[Buffer.RANKS.value]
+        self.mst_ = buffers[Buffer.MST.value]
+        self.linkage_ = None
+        self.labels_ = buffers[Buffer.LABELS.value]
+
+    def fit_tree(self, X, y=None):
+        """Build the DRUHG spanning tree only.
+
+        A ``progress_interval`` heartbeat reports status while building.
+        Ctrl+C stops the MST. Labeling is left to ``label()`` /
+        ``relabel()`` / ``fit()``.
+
+        Parameters
+        ----------
+        X : array or sparse (CSR) matrix of shape (n_samples, n_features), \
+                (n_samples,), or (n_samples, n_samples)
+            A feature array (a 1-d vector is n samples with one feature), or
+            array of distances between samples if ``metric='precomputed'``.
+
+        Returns
+        -------
+        self : object
+            Returns self. ``labels_`` is not set.
+        """
+        kwargs = self.get_params()
+        kwargs.update(self._metric_kwargs)
+        kwargs['do_tree_only'] = True
+
+        X = _coerce_feature_array(X, self.algorithm, self.metric)
+        self._size = X.shape[0]
+        self._raw_data = X
+
+        buffers, num_edges = druhg(X, **kwargs)
+        self._store_tree_result(buffers, num_edges)
+        self.labels_ = None
+        return self
 
     def fit(self, X, y=None):
         """Perform DRUHG clustering.
+
+        A ``progress_interval`` heartbeat (default 30s) reports edge
+        count and percentage while the MST runs, in place on a
+        terminal or Jupyter cell. Ctrl+C (or interrupt kernel) stops
+        only MST construction; labeling is O(n) and always runs on the
+        partial forest.
 
         Parameters
         ----------
@@ -656,13 +770,8 @@ class DRUHG(BaseEstimator, ClusterMixin):
         self._size = X.shape[0]
         self._raw_data = X
 
-        self.buffers_, self.num_edges_ = druhg(X, **kwargs)
-
-        self.labels_ = self.buffers_[Buffer.LABELS.value]
-        self.values_ = self.buffers_[Buffer.VALUES.value]
-        self.ranks_ = self.buffers_[Buffer.RANKS.value]
-        self.mst_ = self.buffers_[Buffer.MST.value]
-        self.linkage_ = None
+        buffers, num_edges = druhg(X, **kwargs)
+        self._store_tree_result(buffers, num_edges)
         return self
 
     def fit_predict(self, X, y=None):
@@ -782,6 +891,31 @@ class DRUHG(BaseEstimator, ClusterMixin):
 
         return Z
 
+    def label(self, exclude=None, size_range=None, limitL=None, limitH=None, fix_outliers=None, **kwargs):
+        """Assign cluster labels from the current MST (full or partial).
+
+        Call after ``fit_tree()``. Uses the estimator's ``exclude``,
+        ``limitL`` / ``limitH``, and ``fix_outliers`` when those
+        arguments are omitted.
+
+        Returns
+        -------
+        y : ndarray, shape (n_samples, )
+            cluster labels, -1 are outliers
+        """
+        if self.buffers_ is None:
+            raise AttributeError('Call fit_tree() or fit() first.')
+        if exclude is None:
+            exclude = self.exclude
+        if size_range is None and limitL is None and limitH is None:
+            limitL = self.limitL
+            limitH = self.limitH
+        if fix_outliers is None:
+            fix_outliers = self.fix_outliers
+        return self.relabel(exclude=exclude, size_range=size_range,
+                            limitL=limitL, limitH=limitH,
+                            fix_outliers=fix_outliers, **kwargs)
+
     def relabel(self, exclude=None, size_range=None, limitL=None, limitH=None, fix_outliers=None, **kwargs):
         """Relabeling with the limits on cluster size.
 
@@ -804,6 +938,9 @@ class DRUHG(BaseEstimator, ClusterMixin):
             cluster labels,
             -1 are outliers
         """
+        if self.buffers_ is None:
+            raise AttributeError('Call fit_tree() or fit() first.')
+
         printout, limitL, limitH = _resolve_size_range(self._size, size_range, limitL, limitH)
 
         if fix_outliers is None:
@@ -814,6 +951,10 @@ class DRUHG(BaseEstimator, ClusterMixin):
 
         if printout:
             logging.getLogger(__package__).info('Relabeling using defaults for: ' + printout)
+
+        if self.labels_ is None or self.buffers_[Buffer.LABELS.value] is None:
+            self.labels_ = allocate_buffer_labels(self._size)
+            self.buffers_[Buffer.LABELS.value] = self.labels_
 
         clusterizer = Clusterizer(
             self.buffers_[Buffer.UNIONFIND.value], self._size,
@@ -826,6 +967,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
             exclude=exclude, size_range=[int(limitL), int(limitH)],
             fix_outliers=fix_outliers, edgepairs_arr=self.buffers_[Buffer.MST.value],
             precision=precision, **kwargs)
+        self.buffers_[Buffer.LABELS.value] = self.labels_
 
         return self.labels_
 
