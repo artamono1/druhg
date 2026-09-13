@@ -453,17 +453,13 @@ def druhg(X, max_ranking=16,
     else:
         num_edges = 0
         buffers[Buffer.INTERRUPTED.value] = 'KeyboardInterrupt'
-        values = buffers[Buffer.VALUES.value]
-        if values is not None and len(values) > 0:
-            values[0] = -1
-        mst = buffers[Buffer.MST.value]
-        if mst is not None and len(mst) > 1:
-            mst[0] = -1
-            mst[1] = -1
         logger.warning(
             'MSTree formation: interruption result: 0 of %s edges. '
-            'Continuing to labeling on an empty forest.',
+            'Spanning tree was not built.',
             max(size - 1, 0))
+        _drain_keyboard_interrupt()
+        return buffers, num_edges
+
 
     if buffers.get(Buffer.INTERRUPTED.value) is not None:
         _drain_keyboard_interrupt()
