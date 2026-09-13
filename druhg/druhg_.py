@@ -10,6 +10,7 @@ It is most natural clusterization and requires ZERO parameters.
 # License: 3-clause BSD
 
 import copy
+import html
 import logging
 import argparse
 import time
@@ -180,6 +181,54 @@ def _resolve_progress_interval(progress_interval):
     return progress_interval
 
 
+def _in_jupyter_shell():
+    try:
+        from IPython import get_ipython
+    except ImportError:
+        return False
+    ip = get_ipython()
+    if ip is None:
+        return False
+    name = ip.__class__.__name__
+    if name == 'TerminalInteractiveShell':
+        return False
+    if name == 'ZMQInteractiveShell':
+        return True
+    module = type(ip).__module__
+    if 'colab' in module or 'ipykernel' in module:
+        return True
+    config = getattr(ip, 'config', None)
+    try:
+        return bool(config and 'IPKernelApp' in config)
+    except Exception:
+        return False
+
+
+class _JupyterProgress(object):
+    """One updatable output in a notebook. IPython is imported lazily."""
+
+    def __init__(self):
+        self._handle = None
+
+    def write(self, msg):
+        from IPython.display import HTML, display
+        payload = HTML(
+            '<pre style="margin:0">%s</pre>' % html.escape(str(msg), quote=False))
+        if self._handle is None:
+            self._handle = display(payload, display_id=True)
+        else:
+            self._handle.update(payload)
+
+    def close(self):
+        self._handle = None
+
+
+def _try_jupyter_progress():
+    if not _in_jupyter_shell():
+        return None
+    return _JupyterProgress()
+
+
 def _drain_keyboard_interrupt():
     """Drop a leftover Ctrl+C from MST stop so O(n) labeling always finishes."""
     try:
@@ -330,10 +379,10 @@ def druhg(X, max_ranking=16,
     progress_interval : float, optional (default=5)
         Seconds between MST status updates (edge count, percentage,
         elapsed time). Visible even when ``verbose=False``, so a large
-        input does not look frozen. On a terminal, the heartbeat
-        overwrites one line; in Jupyter, pipes, and log files it is a
-        new warning line. ``None`` uses the default. ``0`` disables
-        the heartbeat.
+        input does not look frozen. On a terminal the heartbeat
+        overwrites one line; in Jupyter it updates one output cell.
+        Pipes and log files get a new warning line. ``None`` uses the
+        default. ``0`` disables the heartbeat.
 
     size_range : [float, float], optional (default=[sqrt(size), size/2])
         Clusters that are smaller or bigger than this limit treated as noise.
@@ -409,6 +458,7 @@ def druhg(X, max_ranking=16,
         X, core_n_jobs, max_ranking, leaf_size, metric, p, size_range, limitL, limitH)
     timeout, max_edges = _resolve_mst_limits(timeout, max_edges)
     progress_interval = _resolve_progress_interval(progress_interval)
+    jupyter_progress = _try_jupyter_progress() if progress_interval else None
     if printout:
         logger.info('Druhg is using defaults for: ' + printout)
 
@@ -439,6 +489,7 @@ def druhg(X, max_ranking=16,
                                   buffer_edgepairs=buffers[Buffer.MST.value],
                                   timeout=timeout, max_edges=max_edges,
                                   progress_interval=progress_interval,
+                                  jupyter_progress=jupyter_progress,
                                   **kwargs)
     except KeyboardInterrupt:
         logger.warning(
@@ -789,8 +840,9 @@ class DRUHG(BaseEstimator, ClusterMixin):
 
         ``timeout`` and ``max_edges`` log a status reminder and keep
         building. A ``progress_interval`` heartbeat (default 5s) reports
-        edge count and percentage while the MST runs. Ctrl+C stops only
-        MST construction; labeling is O(n) and always runs on the
+        edge count and percentage while the MST runs, in place on a
+        terminal or Jupyter cell. Ctrl+C (or interrupt kernel) stops
+        only MST construction; labeling is O(n) and always runs on the
         partial forest.
 
         Parameters

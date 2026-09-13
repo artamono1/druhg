@@ -177,6 +177,7 @@ cdef class UniversalReciprocity (object):
         bint progress_line_open
         np.intp_t progress_line_width
         object interrupt_reason
+        object jupyter_progress
 
     def __init__(self, algorithm, tree,
                  buffer_uf, buffer_fast, buffer_values,
@@ -184,6 +185,7 @@ cdef class UniversalReciprocity (object):
                  buffer_ranks=None, buffer_edgepairs=None,
                  buffer_clusters=None,
                  timeout=None, max_edges=None, progress_interval=None,
+                 jupyter_progress=None,
                  **kwargs):
 
         self.logger = logging.getLogger(__package__)
@@ -229,6 +231,7 @@ cdef class UniversalReciprocity (object):
         self.progress_line_open = 0
         self.progress_line_width = 0
         self.interrupt_reason = None
+        self.jupyter_progress = jupyter_progress
         self.t0 = 0.
         self.t_last_progress = 0.
 
@@ -270,10 +273,16 @@ cdef class UniversalReciprocity (object):
         return self.result_values_arr, self.U.parent_arr
 
     cdef void _end_progress_line(self) except *:
+        if self.jupyter_progress is not None:
+            try:
+                self.jupyter_progress.close()
+            except Exception:
+                pass
         if not self.progress_line_open:
             return
-        sys.stderr.write('\n')
-        sys.stderr.flush()
+        if self._stderr_is_tty():
+            sys.stderr.write('\n')
+            sys.stderr.flush()
         self.progress_line_open = 0
         self.progress_line_width = 0
 
@@ -314,6 +323,21 @@ cdef class UniversalReciprocity (object):
         sys.stderr.flush()
         self.progress_line_open = 1
         self.progress_line_width = len(msg)
+
+    cdef void _write_jupyter_status(self, msg) except *:
+        try:
+            self.jupyter_progress.write(msg)
+        except Exception:
+            self.logger.warning('%s', msg)
+            return
+        self.progress_line_open = 1
+
+    cdef void _write_inplace_status(self, msg) except *:
+        if self._stderr_is_tty():
+            self._write_tty_status(msg)
+            return
+        if self.jupyter_progress is not None:
+            self._write_jupyter_status(msg)
 
     cdef void _note_interrupt(self, reason) except *:
         cdef np.intp_t total
@@ -366,7 +390,15 @@ cdef class UniversalReciprocity (object):
                 self.result_edges, total,
                 100. * self.result_edges / total,
                 time.monotonic() - self.t0)
-            self._write_tty_status(msg)
+            self._write_inplace_status(msg)
+            self.t_last_progress = time.monotonic()
+            return
+        if self.jupyter_progress is not None:
+            msg = 'MSTree formation: %s/%s edges (%.1f%%) %.1fs  Interrupt kernel stops MST' % (
+                self.result_edges, total,
+                100. * self.result_edges / total,
+                time.monotonic() - self.t0)
+            self._write_inplace_status(msg)
             self.t_last_progress = time.monotonic()
             return
         self.logger.warning('%s', log_msg)
@@ -624,8 +656,8 @@ cdef class UniversalReciprocity (object):
                 'kNN querying: %s neighbors for %s points. '
                 'Ctrl+C after this step stops MST and continues labeling.',
                 self.max_neighbors_search, self.num_points)
-            if self.progress_interval > 0. and self._stderr_is_tty():
-                self._write_tty_status(
+            if self.progress_interval > 0.:
+                self._write_inplace_status(
                     'kNN querying: blocking, no ticks until neighbors return')
         else:
             self.logger.info('kNN querying: %s neighbors for %s points.',

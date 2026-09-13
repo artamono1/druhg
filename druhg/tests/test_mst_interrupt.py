@@ -99,6 +99,80 @@ def test_progress_inplace_on_tty(capsys, monkeypatch, caplog):
     assert dr.num_edges_ == 49
 
 
+class _FakeJupyterProgress(object):
+    def __init__(self):
+        self.msgs = []
+        self.closed = 0
+
+    def write(self, msg):
+        self.msgs.append(msg)
+
+    def close(self):
+        self.closed += 1
+
+
+def test_progress_inplace_in_jupyter(monkeypatch, caplog):
+    fake = _FakeJupyterProgress()
+    monkeypatch.setattr('druhg.druhg_._try_jupyter_progress', lambda: fake)
+    X = _blob(n=50)
+    caplog.set_level(logging.WARNING, logger='druhg')
+    dr = DRUHG(progress_interval=1e-15, limitL=1, limitH=50, verbose=False)
+    dr.fit(X)
+
+    assert fake.msgs
+    assert any('Interrupt kernel stops MST' in msg for msg in fake.msgs)
+    assert fake.closed >= 1
+    assert 'Still working' not in caplog.text
+    assert dr.num_edges_ == 49
+
+
+def test_jupyter_progress_skipped_on_tty(monkeypatch, capsys, caplog):
+    fake = _FakeJupyterProgress()
+    monkeypatch.setattr('druhg.druhg_._try_jupyter_progress', lambda: fake)
+    monkeypatch.setattr(sys.stderr, 'isatty', lambda: True)
+    X = _blob(n=50)
+    caplog.set_level(logging.WARNING, logger='druhg')
+    DRUHG(progress_interval=1e-15, limitL=1, limitH=50, verbose=False).fit(X)
+
+    err = capsys.readouterr().err
+    assert '\r' in err
+    assert 'Ctrl+C stops MST' in err
+    assert not any('Interrupt kernel stops MST' in msg for msg in fake.msgs)
+
+
+def test_try_jupyter_progress_requires_notebook_shell(monkeypatch):
+    from druhg.druhg_ import _try_jupyter_progress
+
+    class TerminalInteractiveShell(object):
+        pass
+
+    class ZMQInteractiveShell(object):
+        pass
+
+    monkeypatch.setattr('IPython.get_ipython', lambda: TerminalInteractiveShell())
+    assert _try_jupyter_progress() is None
+
+    captured = []
+
+    class Handle(object):
+        def update(self, payload):
+            captured.append(payload)
+
+    def fake_display(payload, display_id=True):
+        captured.append(payload)
+        return Handle()
+
+    monkeypatch.setattr('IPython.get_ipython', lambda: ZMQInteractiveShell())
+    monkeypatch.setattr('IPython.display.display', fake_display)
+    prog = _try_jupyter_progress()
+    assert prog is not None
+    prog.write('hello')
+    prog.write('world')
+    assert len(captured) == 2
+    assert 'hello' in captured[0].data
+    assert 'world' in captured[1].data
+
+
 def test_knn_start_warns_on_large_input(caplog):
     X = _blob(n=1000)
     caplog.set_level(logging.WARNING, logger='druhg')
