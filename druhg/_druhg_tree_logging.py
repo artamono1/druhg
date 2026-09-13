@@ -152,12 +152,6 @@ class TreeLogging(object):
             'MSTree formation: interruption started (%s) after %s edges %.2f%% of %s.',
             reason, result_edges, pct, total)
 
-    def prompt_limit(self, reason, result_edges, num_points):
-        total, pct = _edge_progress(result_edges, num_points)
-        self.warning(
-            'MSTree formation: %s limit reached after %s edges %.2f%% of %s. %s',
-            reason, result_edges, pct, total, _WAIT_HINT)
-
     def prompt_progress(self, result_edges, num_points, elapsed):
         total, pct = _edge_progress(result_edges, num_points)
         if self.is_tty or self.jupyter_progress is not None:

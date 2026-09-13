@@ -167,14 +167,10 @@ cdef class UniversalReciprocity (object):
         object logger
         object log
 
-        np.double_t timeout
         np.double_t t0
         np.double_t progress_interval
         np.double_t t_last_progress
-        np.intp_t max_edges_limit
         bint interrupted
-        bint warned_timeout
-        bint warned_max_edges
         object interrupt_reason
 
     def __init__(self, algorithm, tree,
@@ -182,7 +178,7 @@ cdef class UniversalReciprocity (object):
                  max_neighbors_search=16, metric='euclidean', leaf_size=20, n_jobs=4,
                  buffer_ranks=None, buffer_edgepairs=None,
                  buffer_clusters=None,
-                 timeout=None, max_edges=None, progress_interval=None,
+                 progress_interval=None,
                  jupyter_progress=None,
                  **kwargs):
 
@@ -211,22 +207,12 @@ cdef class UniversalReciprocity (object):
 
         self.max_neighbors_search = max_neighbors_search
 
-        self.timeout = 0.
-        if timeout is not None:
-            t = float(timeout)
-            if t > 0.:
-                self.timeout = t
         self.progress_interval = 0.
         if progress_interval is not None:
             p = float(progress_interval)
             if p > 0.:
                 self.progress_interval = p
-        self.max_edges_limit = 0
-        if max_edges is not None and int(max_edges) > 0:
-            self.max_edges_limit = int(max_edges)
         self.interrupted = 0
-        self.warned_timeout = 0
-        self.warned_max_edges = 0
         self.interrupt_reason = None
         self.t0 = 0.
         self.t_last_progress = 0.
@@ -272,32 +258,16 @@ cdef class UniversalReciprocity (object):
         self.interrupt_reason = reason
         self.log.note_interrupt(reason, self.result_edges, self.num_points)
 
-    cdef void _prompt_limit(self, reason) except *:
-        self.log.prompt_limit(reason, self.result_edges, self.num_points)
-        self.t_last_progress = time.monotonic()
-
     cdef void _prompt_progress(self) except *:
         self.log.prompt_progress(
             self.result_edges, self.num_points, time.monotonic() - self.t0)
         self.t_last_progress = time.monotonic()
 
     cdef void _should_stop_mst(self) except *:
-        cdef np.double_t now
-        if self.result_edges < self.num_points - 1:
-            if (self.max_edges_limit > 0 and self.result_edges >= self.max_edges_limit
-                    and not self.warned_max_edges):
-                self.warned_max_edges = 1
-                self._prompt_limit('max_edges')
-            if self.timeout > 0. or self.progress_interval > 0.:
-                now = time.monotonic()
-                if (self.timeout > 0. and (now - self.t0) >= self.timeout
-                        and not self.warned_timeout):
-                    self.warned_timeout = 1
-                    self._prompt_limit('timeout')
-                    now = self.t_last_progress
-                if (self.progress_interval > 0.
-                        and (now - self.t_last_progress) >= self.progress_interval):
-                    self._prompt_progress()
+        if (self.result_edges < self.num_points - 1
+                and self.progress_interval > 0.
+                and (time.monotonic() - self.t_last_progress) >= self.progress_interval):
+            self._prompt_progress()
         PyErr_CheckSignals()
 
     cdef void _finalize_incomplete_tree(self):
