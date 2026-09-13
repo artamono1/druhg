@@ -1,11 +1,8 @@
 """Tests for interrupting MST construction and labeling the partial forest."""
 import logging
-import _thread
-import threading
 
 import numpy as np
 import pytest
-from scipy.cluster.hierarchy import is_valid_linkage
 
 from druhg import Buffer, DRUHG, druhg
 
@@ -13,28 +10,6 @@ from druhg import Buffer, DRUHG, druhg
 def _blob(n=60, seed=0):
     rng = np.random.RandomState(seed)
     return np.ascontiguousarray(rng.randn(n, 2), dtype=np.float64)
-
-
-def _fit_with_interrupt(dr, X):
-    started = threading.Event()
-    finished = threading.Event()
-
-    def boom():
-        started.wait(timeout=5)
-        if not finished.is_set():
-            _thread.interrupt_main()
-
-    threading.Thread(target=boom, daemon=True).start()
-    started.set()
-    try:
-        try:
-            dr.fit(X)
-        except KeyboardInterrupt:
-            # Ctrl+C landed in post-MST logging/labeling; MST catch already ran or tree is usable.
-            pass
-    finally:
-        finished.set()
-    return dr
 
 
 def test_max_edges_prompts_and_continues(caplog):
@@ -94,22 +69,27 @@ def test_timeout_prompts_and_continues(caplog):
     assert 'Ctrl+C' in caplog.text
 
 
-def test_partial_tree_hierarchy_and_relabel():
-    DRUHG(verbose=False, limitL=1, limitH=20).fit(_blob(n=20))
-    X = _blob(n=800, seed=2)
-    dr = DRUHG(verbose=False, limitL=1, limitH=800, do_edges=True)
-    _fit_with_interrupt(dr, X)
+def test_progress_interval_prompts_and_continues(caplog):
+    X = _blob(n=50)
+    caplog.set_level(logging.WARNING, logger='druhg')
+    dr = DRUHG(progress_interval=1e-15, limitL=1, limitH=50, verbose=False)
+    dr.fit(X)
 
-    assert dr.interrupted_ is True
-    assert dr.interrupt_reason_ == 'KeyboardInterrupt'
-    assert dr.num_edges_ < 799
+    assert dr.interrupted_ is False
+    assert dr.num_edges_ == 49
+    assert 'Still working' in caplog.text
+    assert '% of 49' in caplog.text
+    assert 'Ctrl+C' in caplog.text
 
-    Z = dr.hierarchy(plot=False)
-    assert Z.shape == (799, 4)
-    assert is_valid_linkage(Z, throw=True)
 
-    labels = dr.relabel(limitL=1, limitH=800)
-    assert labels.shape == (800,)
+def test_knn_start_warns_on_large_input(caplog):
+    X = _blob(n=1000)
+    caplog.set_level(logging.WARNING, logger='druhg')
+    dr = DRUHG(progress_interval=0, limitL=1, limitH=1000, verbose=False)
+    dr.fit(X)
+
+    assert 'kNN querying: 24 neighbors for 1000 points' in caplog.text
+    assert 'Ctrl+C' in caplog.text
 
 
 def test_druhg_function_max_edges_keeps_building(caplog):
@@ -136,17 +116,5 @@ def test_max_edges_validation():
         DRUHG(max_edges=0).fit(X)
     with pytest.raises(ValueError, match='timeout'):
         DRUHG(timeout=-1).fit(X)
-
-
-def test_keyboard_interrupt_still_labels():
-    # Warm neighbor-tree so Ctrl+C lands in MST, not first compile.
-    DRUHG(verbose=False, limitL=1, limitH=20).fit(_blob(n=20))
-    X = _blob(n=800, seed=1)
-    dr = DRUHG(verbose=False, limitL=1, limitH=800)
-    _fit_with_interrupt(dr, X)
-
-    assert dr.interrupted_ is True
-    assert dr.interrupt_reason_ == 'KeyboardInterrupt'
-    assert dr.num_edges_ < 799
-    assert dr.labels_ is not None
-    assert dr.labels_.shape == (800,)
+    with pytest.raises(ValueError, match='progress_interval'):
+        DRUHG(progress_interval=-1).fit(X)

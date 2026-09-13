@@ -12,6 +12,7 @@ It is most natural clusterization and requires ZERO parameters.
 import copy
 import logging
 import argparse
+import time
 from enum import Enum
 
 import numpy as np
@@ -165,6 +166,28 @@ def _resolve_mst_limits(timeout, max_edges):
     return timeout, max_edges
 
 
+def _resolve_progress_interval(progress_interval):
+    if progress_interval is None:
+        return 5.0
+    try:
+        progress_interval = float(progress_interval)
+    except (TypeError, ValueError):
+        raise ValueError('progress_interval must be a number of seconds!')
+    if progress_interval < 0:
+        raise ValueError('progress_interval must be non-negative!')
+    if progress_interval == 0:
+        return None
+    return progress_interval
+
+
+def _drain_keyboard_interrupt():
+    """Drop a leftover Ctrl+C from MST stop so O(n) labeling always finishes."""
+    try:
+        time.sleep(0)
+    except KeyboardInterrupt:
+        pass
+
+
 def _coerce_feature_array(X, algorithm, metric):
     """Interpret a 1-d vector as n samples with one feature."""
     if type(X) is list:
@@ -263,7 +286,7 @@ def _parsing_setup():
 def druhg(X, max_ranking=16,
           do_labeling=True,
           do_tree_only=False,
-          timeout=None, max_edges=None,
+          timeout=None, max_edges=None, progress_interval=None,
           size_range=None,
           limitL=None, limitH=None,
           exclude=None, fix_outliers=False,
@@ -303,6 +326,12 @@ def druhg(X, max_ranking=16,
         After this many MST edges, log the current edge count and
         percentage and keep building. ``None`` means no reminder.
         Ctrl+C then stops the MST and continues to labeling.
+
+    progress_interval : float, optional (default=5)
+        Seconds between MST status lines (edge count, percentage,
+        elapsed time). Visible even when ``verbose=False``, so a large
+        input does not look frozen. ``None`` uses the default. ``0``
+        disables the heartbeat.
 
     size_range : [float, float], optional (default=[sqrt(size), size/2])
         Clusters that are smaller or bigger than this limit treated as noise.
@@ -377,6 +406,7 @@ def druhg(X, max_ranking=16,
     printout, core_n_jobs, max_ranking, limitL, limitH = _check_input(
         X, core_n_jobs, max_ranking, leaf_size, metric, p, size_range, limitL, limitH)
     timeout, max_edges = _resolve_mst_limits(timeout, max_edges)
+    progress_interval = _resolve_progress_interval(progress_interval)
     if printout:
         logger.info('Druhg is using defaults for: ' + printout)
 
@@ -406,10 +436,11 @@ def druhg(X, max_ranking=16,
                                   buffer_ranks=buffers[Buffer.RANKS.value],
                                   buffer_edgepairs=buffers[Buffer.MST.value],
                                   timeout=timeout, max_edges=max_edges,
+                                  progress_interval=progress_interval,
                                   **kwargs)
     except KeyboardInterrupt:
-        logger.info(
-            'MSTree formation: interrupted before or during tree construction (KeyboardInterrupt).')
+        logger.warning(
+            'MSTree formation: interruption started (KeyboardInterrupt) before the spanning tree was built.')
 
     if ur is not None:
         num_edges = ur.get_num_edges()
@@ -424,6 +455,13 @@ def druhg(X, max_ranking=16,
         if mst is not None and len(mst) > 1:
             mst[0] = -1
             mst[1] = -1
+        logger.warning(
+            'MSTree formation: interruption result: 0 of %s edges. '
+            'Continuing to labeling on an empty forest.',
+            max(size - 1, 0))
+
+    if buffers.get(Buffer.INTERRUPTED.value) is not None:
+        _drain_keyboard_interrupt()
 
     clusterizer = Clusterizer(buffers[Buffer.UNIONFIND.value], size, buffers[Buffer.VALUES.value], X,
                               buffers[Buffer.CLUSTERS.value], buffers[Buffer.SIZES.value], buffers[Buffer.GROUPS.value])
@@ -432,6 +470,11 @@ def druhg(X, max_ranking=16,
         precision=precision, run_motion=not do_labeling)
 
     if do_tree_only:
+        if buffers.get(Buffer.INTERRUPTED.value) is not None:
+            logger.warning(
+                'Interruption result: spanning tree only, %s of %s edges (%s). '
+                'Call label() to assign clusters.',
+                num_edges, max(size - 1, 0), buffers[Buffer.INTERRUPTED.value])
         return buffers, num_edges
 
     if do_labeling:
@@ -439,13 +482,18 @@ def druhg(X, max_ranking=16,
             buffers[Buffer.LABELS.value],
             exclude=exclude, size_range=[int(limitL), int(limitH)],
             fix_outliers=fix_outliers, edgepairs_arr=buffers[Buffer.MST.value], **kwargs)
+        if buffers.get(Buffer.INTERRUPTED.value) is not None:
+            logger.warning(
+                'Interruption result: labeled %s points from a partial forest '
+                '(%s of %s edges, %s).',
+                size, num_edges, max(size - 1, 0),
+                buffers[Buffer.INTERRUPTED.value])
         return buffers, num_edges
 
     buffers[Buffer.OUTPUT.value] = develop(
         buffers[Buffer.VALUES.value], buffers[Buffer.UNIONFIND.value], size,
         buffers[Buffer.GROUPS.value], X, buffers[Buffer.SIZES.value], buffers[Buffer.CLUSTERS.value],
         buffers[Buffer.OUTPUT.value], **kwargs)
-
     return buffers, num_edges
 
 
@@ -671,6 +719,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
                  core_n_jobs=None,
                  timeout=None,
                  max_edges=None,
+                 progress_interval=None,
                  **kwargs):
         self.max_ranking = max_ranking
         self.limitL = limitL
@@ -684,6 +733,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         self.core_n_jobs = core_n_jobs
         self.timeout = timeout
         self.max_edges = max_edges
+        self.progress_interval = progress_interval
         self._metric_kwargs = kwargs
 
         self._size = 0
@@ -713,9 +763,10 @@ class DRUHG(BaseEstimator, ClusterMixin):
     def fit_tree(self, X, y=None):
         """Build the DRUHG spanning tree only.
 
-        ``timeout`` and ``max_edges`` remind once when reached; Ctrl+C
-        stops the MST. Labeling is left to ``label()`` / ``relabel()``
-        / ``fit()``.
+        ``timeout`` and ``max_edges`` remind once when reached; a
+        ``progress_interval`` heartbeat reports status while building.
+        Ctrl+C stops the MST. Labeling is left to ``label()`` /
+        ``relabel()`` / ``fit()``.
 
         Parameters
         ----------
@@ -746,8 +797,10 @@ class DRUHG(BaseEstimator, ClusterMixin):
         """Perform DRUHG clustering.
 
         ``timeout`` and ``max_edges`` log a status reminder and keep
-        building. Ctrl+C during MST construction keeps the partial
-        forest and still runs labeling.
+        building. A ``progress_interval`` heartbeat (default 5s) reports
+        edge count and percentage while the MST runs. Ctrl+C stops only
+        MST construction; labeling is O(n) and always runs on the
+        partial forest.
 
         Parameters
         ----------
