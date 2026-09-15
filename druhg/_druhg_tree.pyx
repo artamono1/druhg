@@ -7,7 +7,7 @@
 
 # Builds spanning tree for druhg algorithm
 # uses dialectics to evaluate reciprocity
-# links local minima of per-branch optima (not a global min-heap)
+# links per-branch heap tops via a FIFO of branches (not a global min-heap)
 # Author: Pavel Artamonov
 # License: 3-clause BSD
 
@@ -28,6 +28,7 @@ from ._druhg_unionfind cimport UnionFind
 from ._druhg_pairwise import PairwiseDistanceTreeSparse, PairwiseDistanceTreeGeneric
 
 import _heapq as heapq
+from collections import deque
 
 import bisect
 
@@ -110,13 +111,7 @@ cdef class UniversalReciprocity (object):
         np.intp_t[:] opt_rank
         np.intp_t[:] opt_target
         list branch_heap
-        list pointing_at
-        set live_branches
-        np.intp_t cand_i
-        np.intp_t cand_j
-        np.intp_t cand_A
-        np.intp_t cand_B
-        np.double_t cand_v
+        object branch_queue
 
     def __init__(self, algorithm, tree,
                  buffer_uf, buffer_fast, buffer_values,
@@ -405,10 +400,8 @@ cdef class UniversalReciprocity (object):
         self.opt_rank[i] = <np.intp_t> rel.max_rank
         target = self.U.mark_up(rel.endpoint)
         self.opt_target[i] = target
-        self.pointing_at[target].append(i)
         p = self.U.mark_up(i)
         heapq.heappush(self.branch_heap[p], (rel.reciprocity, i))
-        self.live_branches.add(p)
 
     cdef void _refresh_optimum(self, np.intp_t i,
                                np.ndarray[np.intp_t, ndim=2] knn_indices,
@@ -454,16 +447,26 @@ cdef class UniversalReciprocity (object):
                     for item in self.branch_heap[lab]:
                         heapq.heappush(self.branch_heap[root], item)
                     self.branch_heap[lab] = []
-                    self.live_branches.discard(lab)
-                    if self.branch_heap[root]:
-                        self.live_branches.add(root)
             lab += 1
 
-    cdef bint _heap_top_valid(self, np.intp_t A,
-                              np.intp_t* out_i, np.intp_t* out_j,
-                              np.double_t* out_v, np.intp_t* out_B,
-                              np.ndarray[np.intp_t, ndim=2] knn_indices,
-                              np.ndarray[np.double_t, ndim=2] knn_dist) except *:
+    cdef void _enqueue_live_roots(self) except *:
+        cdef np.intp_t i, p
+        cdef set seen
+
+        seen = set()
+        self.branch_queue = deque()
+        i = self.num_points
+        while i:
+            i -= 1
+            p = self.U.mark_up(i)
+            if p in seen:
+                continue
+            seen.add(p)
+            self.branch_queue.append(p)
+
+    cdef bint _peek_top(self, np.intp_t A,
+                        np.intp_t* out_i, np.intp_t* out_j,
+                        np.double_t* out_v, np.intp_t* out_B) except *:
         cdef list heap
         cdef np.intp_t i, j, B, p
         cdef np.double_t v
@@ -489,14 +492,6 @@ cdef class UniversalReciprocity (object):
                 heapq.heappop(heap)
                 continue
             B = self.U.mark_up(j)
-            if B == A:
-                heapq.heappop(heap)
-                self._refresh_optimum(i, knn_indices, knn_dist)
-                continue
-            if B != self.opt_target[i]:
-                heapq.heappop(heap)
-                self._refresh_optimum(i, knn_indices, knn_dist)
-                continue
             out_i[0] = i
             out_j[0] = j
             out_v[0] = v
@@ -504,75 +499,40 @@ cdef class UniversalReciprocity (object):
             return 1
         return 0
 
-    cdef bint _is_local_min(self, np.intp_t A,
-                            np.ndarray[np.intp_t, ndim=2] knn_indices,
-                            np.ndarray[np.double_t, ndim=2] knn_dist) except *:
-        cdef np.intp_t i, j, B, bi, bj, bB
-        cdef np.double_t v, bv
+    cdef bint _resolve_self_target(self, np.intp_t A,
+                                   np.intp_t* out_i, np.intp_t* out_j,
+                                   np.double_t* out_v, np.intp_t* out_B,
+                                   np.ndarray[np.intp_t, ndim=2] knn_indices,
+                                   np.ndarray[np.double_t, ndim=2] knn_dist,
+                                   bint* refreshed) except *:
+        cdef np.intp_t i, j, B
+        cdef np.double_t v
 
-        if not self._heap_top_valid(A, &i, &j, &v, &B, knn_indices, knn_dist):
-            self.live_branches.discard(A)
-            return 0
-
-        if self._heap_top_valid(B, &bi, &bj, &bv, &bB, knn_indices, knn_dist):
-            if bv < v - self.PRECISION:
-                return 0
-
-        self.cand_i = i
-        self.cand_j = j
-        self.cand_A = A
-        self.cand_B = B
-        self.cand_v = v
-        return 1
-
-    cdef void _update_pointing_at(self, np.intp_t A, np.intp_t B,
-                                  np.ndarray[np.intp_t, ndim=2] knn_indices,
-                                  np.ndarray[np.double_t, ndim=2] knn_dist) except *:
-        cdef list pts
-        cdef object i_obj
-        cdef np.intp_t i, label, k
-
-        k = 0
-        while k < 2:
-            label = A if k == 0 else B
-            pts = self.pointing_at[label]
-            self.pointing_at[label] = []
-            for i_obj in pts:
-                i = i_obj
-                if self.opt_target[i] != label:
-                    continue
-                self._refresh_optimum(i, knn_indices, knn_dist)
-            k += 1
-
-    cdef void _link_candidate(self, np.intp_t* edge_cases,
-                              np.ndarray[np.intp_t, ndim=2] knn_indices,
-                              np.ndarray[np.double_t, ndim=2] knn_dist) except *:
-        cdef np.intp_t i, j, A, B, C, rank
-
-        i = self.cand_i
-        j = self.cand_j
-        A = self.cand_A
-        B = self.cand_B
-        rank = self.opt_rank[i]
-
-        if self.branch_heap[A]:
+        refreshed[0] = 0
+        while self._peek_top(A, &i, &j, &v, &B):
+            if B != A:
+                out_i[0] = i
+                out_j[0] = j
+                out_v[0] = v
+                out_B[0] = B
+                return 1
+            refreshed[0] = 1
             heapq.heappop(self.branch_heap[A])
+            self._refresh_optimum(i, knn_indices, knn_dist)
+        return 0
 
-        self.result_write(self.cand_v, i, j, rank)
+    cdef np.intp_t _link_branches(self, np.intp_t A, np.intp_t B,
+                                  np.intp_t i, np.intp_t j, np.double_t v,
+                                  np.intp_t* edge_cases):
+        cdef np.intp_t C, rank
+
+        rank = self.opt_rank[i]
+        self.result_write(v, i, j, rank)
         C = self.U.union(i, j, A, B)
         if rank == self.max_neighbors_search:
             edge_cases[0] += 1
-
         self._absorb_heap(A, B, C)
-        self.live_branches.discard(A)
-        self.live_branches.discard(B)
-
-        self._update_pointing_at(A, B, knn_indices, knn_dist)
-        self._refresh_optimum(i, knn_indices, knn_dist)
-        self._refresh_optimum(j, knn_indices, knn_dist)
-
-        if self.branch_heap[C]:
-            self.live_branches.add(C)
+        return C
 
     cdef void _compute_tree_edges(self) except *:
         cdef np.intp_t edge_cases
@@ -591,20 +551,20 @@ cdef class UniversalReciprocity (object):
 
     cdef np.intp_t _form_mst(self) except -1:
         # DRUHG
-        # computes DRUHG spanning tree from per-branch optima
+        # computes DRUHG spanning tree from a FIFO of per-branch heap tops
         cdef:
-            np.intp_t i, p, op, pp, A, N, \
-                warn, infinitesimal, edge_cases, linked, pass_id
-            np.intp_t dummy_i, dummy_j, dummy_B
-            np.double_t dummy_v
+            np.intp_t i, j, p, op, pp, A, B, C, N, \
+                warn, infinitesimal, edge_cases, skips
+            np.intp_t bi, bj, bB
+            np.double_t v, bv
+            bint refreshed
 
             Relation rel = Relation(0,0,0,0, 0,0)
 
             np.ndarray[np.double_t, ndim=2] knn_dist
             np.ndarray[np.intp_t, ndim=2] knn_indices
 
-            list snapshot
-            object A_obj
+            object qitem
 
         N = self.num_points
         self.opt_value_arr = np.full(N, INF)
@@ -616,13 +576,7 @@ cdef class UniversalReciprocity (object):
         self.opt_rank = self.opt_rank_arr
         self.opt_target = self.opt_target_arr
         self.branch_heap = [[] for _ in range(2 * N)]
-        self.pointing_at = [[] for _ in range(2 * N)]
-        self.live_branches = set()
-        self.cand_i = 0
-        self.cand_j = 0
-        self.cand_A = 0
-        self.cand_B = 0
-        self.cand_v = INF
+        self.branch_queue = deque()
 
         edge_cases = 0
         self.log.knn_query_start(
@@ -653,10 +607,6 @@ cdef class UniversalReciprocity (object):
                 p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
                 pp = self.U.union(i, rel.endpoint, p, op)
                 self._absorb_heap(p, op, pp)
-                self.live_branches.discard(p)
-                self.live_branches.discard(op)
-                if self.branch_heap[pp]:
-                    self.live_branches.add(pp)
 
                 if rel.reciprocity == 0.: # values match
                     warn += 1
@@ -681,43 +631,36 @@ cdef class UniversalReciprocity (object):
             self.log.warning('Some distances('+str(infinitesimal)+') are smaller than self.PRECISION ('+str(self.PRECISION)+
                    ') level. Try decreasing double_precision parameter.')
 
-        i = self.num_points
-        while i:
-            i -= 1
-            if self.opt_endpoint[i] < 0:
-                continue
-            p = self.U.mark_up(i)
-            op = self.U.mark_up(self.opt_endpoint[i])
-            if op == p or op != self.opt_target[i]:
-                self._refresh_optimum(i, knn_indices, knn_dist)
         self._reattach_heaps()
+        self._enqueue_live_roots()
 
         self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
 ############
-        while self.result_edges < self.num_points - 1 and self.live_branches:
+        skips = 0
+        while self.result_edges < self.num_points - 1 and self.branch_queue:
             self._should_stop_mst()
-            linked = 0
-            pass_id = 0
-            while pass_id < 2 and not linked:
-                snapshot = list(self.live_branches)
-                for A_obj in snapshot:
-                    A = A_obj
-                    if A not in self.live_branches:
-                        continue
-                    if self._is_local_min(A, knn_indices, knn_dist):
-                        self._link_candidate(&edge_cases, knn_indices, knn_dist)
-                        linked = 1
-                        break
-                if linked:
-                    break
-                snapshot = list(self.live_branches)
-                for A_obj in snapshot:
-                    A = A_obj
-                    if not self._heap_top_valid(A, &dummy_i, &dummy_j, &dummy_v, &dummy_B,
-                                                knn_indices, knn_dist):
-                        self.live_branches.discard(A)
-                pass_id += 1
-            if not linked:
-                break
+            qitem = self.branch_queue.popleft()
+            A = qitem
+            # 1. already merged: drop and continue
+            if self._component_root(A) != A:
+                continue
+            # 2. reevaluate while the top still targets this branch
+            if not self._resolve_self_target(A, &i, &j, &v, &B, knn_indices, knn_dist, &refreshed):
+                continue
+            # 3. connect if the opposite branch's outgoing top is worse or equal
+            if self._peek_top(B, &bi, &bj, &bv, &bB):
+                # if bB != B and bv < v - self.PRECISION:
+                if bv < v - self.PRECISION:
+                    self.branch_queue.append(A)
+                    if refreshed:
+                        skips = 0
+                    else:
+                        skips += 1
+                        if skips >= len(self.branch_queue):
+                            break
+                    continue
+            C = self._link_branches(A, B, i, j, v, &edge_cases)
+            self.branch_queue.append(C)
+            skips = 0
 
         return edge_cases

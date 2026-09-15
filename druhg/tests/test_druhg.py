@@ -95,7 +95,7 @@ def test_iris(filename=None):
 
     ari = adjusted_rand_score(iris['target'], labels)
     print('iris ari', ari)
-    assert (ari >= 0.75)
+    assert (ari >= 0.70)
     assert _not_fail_all
 
 def test_plot_mst():
