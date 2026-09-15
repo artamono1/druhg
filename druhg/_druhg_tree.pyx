@@ -5,8 +5,9 @@
 # cython: initializedcheck=False
 # cython: cdivision=True
 
-# Builds minimum spanning tree for druhg algorithm
+# Builds spanning tree for druhg algorithm
 # uses dialectics to evaluate reciprocity
+# links local minima of per-branch optima (not a global min-heap)
 # Author: Pavel Artamonov
 # License: 3-clause BSD
 
@@ -99,6 +100,23 @@ cdef class UniversalReciprocity (object):
         np.double_t t_last_progress
         bint interrupted
         object interrupt_reason
+
+        np.ndarray opt_value_arr
+        np.ndarray opt_endpoint_arr
+        np.ndarray opt_rank_arr
+        np.ndarray opt_target_arr
+        np.double_t[:] opt_value
+        np.intp_t[:] opt_endpoint
+        np.intp_t[:] opt_rank
+        np.intp_t[:] opt_target
+        list branch_heap
+        list pointing_at
+        set live_branches
+        np.intp_t cand_i
+        np.intp_t cand_j
+        np.intp_t cand_A
+        np.intp_t cand_B
+        np.double_t cand_v
 
     def __init__(self, algorithm, tree,
                  buffer_uf, buffer_fast, buffer_values,
@@ -363,6 +381,199 @@ cdef class UniversalReciprocity (object):
         rel.reciprocity = best
         return res
 
+    cdef np.intp_t _component_root(self, np.intp_t p):
+        cdef np.intp_t parent
+
+        while True:
+            parent = self.U.parent_arr[p]
+            if parent == 0:
+                return p
+            p = parent
+
+    cdef void _clear_optimum(self, np.intp_t i):
+        self.opt_value[i] = INF
+        self.opt_endpoint[i] = -1
+        self.opt_rank[i] = 0
+        self.opt_target[i] = -1
+
+    cdef void _set_optimum(self, np.intp_t i, Relation* rel) except *:
+        cdef np.intp_t p, target
+
+        self._clear_optimum(i)
+        self.opt_value[i] = rel.reciprocity
+        self.opt_endpoint[i] = rel.endpoint
+        self.opt_rank[i] = <np.intp_t> rel.max_rank
+        target = self.U.mark_up(rel.endpoint)
+        self.opt_target[i] = target
+        self.pointing_at[target].append(i)
+        p = self.U.mark_up(i)
+        heapq.heappush(self.branch_heap[p], (rel.reciprocity, i))
+        self.live_branches.add(p)
+
+    cdef void _refresh_optimum(self, np.intp_t i,
+                               np.ndarray[np.intp_t, ndim=2] knn_indices,
+                               np.ndarray[np.double_t, ndim=2] knn_dist) except *:
+        cdef Relation rel = Relation(0, 0, 0, 0, 0, 0)
+        cdef np.intp_t parent
+
+        parent = self.U.mark_up(i)
+        self._clear_optimum(i)
+        if self._evaluate_reciprocity(i, parent, knn_indices, knn_dist, &rel):
+            self._set_optimum(i, &rel)
+
+    cdef void _absorb_heap(self, np.intp_t A, np.intp_t B, np.intp_t C) except *:
+        cdef list small, large, ha, hb
+        cdef object item
+
+        ha = self.branch_heap[A]
+        hb = self.branch_heap[B]
+        if len(ha) < len(hb):
+            small = ha
+            large = hb
+        else:
+            small = hb
+            large = ha
+        for item in small:
+            heapq.heappush(large, item)
+        self.branch_heap[C] = large
+        if A != C:
+            self.branch_heap[A] = []
+        if B != C:
+            self.branch_heap[B] = []
+
+    cdef void _reattach_heaps(self) except *:
+        cdef np.intp_t lab, root, n
+        cdef object item
+
+        n = 2 * self.num_points
+        lab = 0
+        while lab < n:
+            if self.branch_heap[lab]:
+                root = self._component_root(lab)
+                if root != lab:
+                    for item in self.branch_heap[lab]:
+                        heapq.heappush(self.branch_heap[root], item)
+                    self.branch_heap[lab] = []
+                    self.live_branches.discard(lab)
+                    if self.branch_heap[root]:
+                        self.live_branches.add(root)
+            lab += 1
+
+    cdef bint _heap_top_valid(self, np.intp_t A,
+                              np.intp_t* out_i, np.intp_t* out_j,
+                              np.double_t* out_v, np.intp_t* out_B,
+                              np.ndarray[np.intp_t, ndim=2] knn_indices,
+                              np.ndarray[np.double_t, ndim=2] knn_dist) except *:
+        cdef list heap
+        cdef np.intp_t i, j, B, p
+        cdef np.double_t v
+        cdef object top
+
+        heap = self.branch_heap[A]
+        while heap:
+            top = heap[0]
+            v = top[0]
+            i = top[1]
+            if i < 0 or i >= self.num_points:
+                heapq.heappop(heap)
+                continue
+            if self.opt_value[i] != v:
+                heapq.heappop(heap)
+                continue
+            p = self.U.mark_up(i)
+            if p != A:
+                heapq.heappop(heap)
+                continue
+            j = self.opt_endpoint[i]
+            if j < 0:
+                heapq.heappop(heap)
+                continue
+            B = self.U.mark_up(j)
+            if B == A:
+                heapq.heappop(heap)
+                self._refresh_optimum(i, knn_indices, knn_dist)
+                continue
+            if B != self.opt_target[i]:
+                heapq.heappop(heap)
+                self._refresh_optimum(i, knn_indices, knn_dist)
+                continue
+            out_i[0] = i
+            out_j[0] = j
+            out_v[0] = v
+            out_B[0] = B
+            return 1
+        return 0
+
+    cdef bint _is_local_min(self, np.intp_t A,
+                            np.ndarray[np.intp_t, ndim=2] knn_indices,
+                            np.ndarray[np.double_t, ndim=2] knn_dist) except *:
+        cdef np.intp_t i, j, B, bi, bj, bB
+        cdef np.double_t v, bv
+
+        if not self._heap_top_valid(A, &i, &j, &v, &B, knn_indices, knn_dist):
+            self.live_branches.discard(A)
+            return 0
+
+        if self._heap_top_valid(B, &bi, &bj, &bv, &bB, knn_indices, knn_dist):
+            if bv < v - self.PRECISION:
+                return 0
+
+        self.cand_i = i
+        self.cand_j = j
+        self.cand_A = A
+        self.cand_B = B
+        self.cand_v = v
+        return 1
+
+    cdef void _update_pointing_at(self, np.intp_t A, np.intp_t B,
+                                  np.ndarray[np.intp_t, ndim=2] knn_indices,
+                                  np.ndarray[np.double_t, ndim=2] knn_dist) except *:
+        cdef list pts
+        cdef object i_obj
+        cdef np.intp_t i, label, k
+
+        k = 0
+        while k < 2:
+            label = A if k == 0 else B
+            pts = self.pointing_at[label]
+            self.pointing_at[label] = []
+            for i_obj in pts:
+                i = i_obj
+                if self.opt_target[i] != label:
+                    continue
+                self._refresh_optimum(i, knn_indices, knn_dist)
+            k += 1
+
+    cdef void _link_candidate(self, np.intp_t* edge_cases,
+                              np.ndarray[np.intp_t, ndim=2] knn_indices,
+                              np.ndarray[np.double_t, ndim=2] knn_dist) except *:
+        cdef np.intp_t i, j, A, B, C, rank
+
+        i = self.cand_i
+        j = self.cand_j
+        A = self.cand_A
+        B = self.cand_B
+        rank = self.opt_rank[i]
+
+        if self.branch_heap[A]:
+            heapq.heappop(self.branch_heap[A])
+
+        self.result_write(self.cand_v, i, j, rank)
+        C = self.U.union(i, j, A, B)
+        if rank == self.max_neighbors_search:
+            edge_cases[0] += 1
+
+        self._absorb_heap(A, B, C)
+        self.live_branches.discard(A)
+        self.live_branches.discard(B)
+
+        self._update_pointing_at(A, B, knn_indices, knn_dist)
+        self._refresh_optimum(i, knn_indices, knn_dist)
+        self._refresh_optimum(j, knn_indices, knn_dist)
+
+        if self.branch_heap[C]:
+            self.live_branches.add(C)
+
     cdef void _compute_tree_edges(self) except *:
         cdef np.intp_t edge_cases
 
@@ -380,18 +591,38 @@ cdef class UniversalReciprocity (object):
 
     cdef np.intp_t _form_mst(self) except -1:
         # DRUHG
-        # computes DRUHG Spanning Tree
-        # uses heap
+        # computes DRUHG spanning tree from per-branch optima
         cdef:
-            np.intp_t i, \
-                warn, infinitesimal, edge_cases
+            np.intp_t i, p, op, pp, A, N, \
+                warn, infinitesimal, edge_cases, linked, pass_id
+            np.intp_t dummy_i, dummy_j, dummy_B
+            np.double_t dummy_v
 
             Relation rel = Relation(0,0,0,0, 0,0)
 
             np.ndarray[np.double_t, ndim=2] knn_dist
             np.ndarray[np.intp_t, ndim=2] knn_indices
 
-            list heap
+            list snapshot
+            object A_obj
+
+        N = self.num_points
+        self.opt_value_arr = np.full(N, INF)
+        self.opt_endpoint_arr = np.full(N, -1, dtype=np.intp)
+        self.opt_rank_arr = np.zeros(N, dtype=np.intp)
+        self.opt_target_arr = np.full(N, -1, dtype=np.intp)
+        self.opt_value = self.opt_value_arr
+        self.opt_endpoint = self.opt_endpoint_arr
+        self.opt_rank = self.opt_rank_arr
+        self.opt_target = self.opt_target_arr
+        self.branch_heap = [[] for _ in range(2 * N)]
+        self.pointing_at = [[] for _ in range(2 * N)]
+        self.live_branches = set()
+        self.cand_i = 0
+        self.cand_j = 0
+        self.cand_A = 0
+        self.cand_B = 0
+        self.cand_v = INF
 
         edge_cases = 0
         self.log.knn_query_start(
@@ -406,12 +637,10 @@ cdef class UniversalReciprocity (object):
         self.log.knn_query_done()
         self._should_stop_mst()
 
-        heap = []
 #### Initialization and pure reciprocity (ranks equal)
         self.logger.info(f'MSTree formation: initializing nearest connections. Pure autoconnect.')
         warn, infinitesimal = 0, 0
 
-        # if self.tree.data.shape[0] > 16384 and self.n_jobs > 1: # multicore 2-3x speed up for big datasets
         i = self.num_points
         while i:
             self._should_stop_mst()
@@ -422,7 +651,12 @@ cdef class UniversalReciprocity (object):
             if self._pure_reciprocity(i, knn_indices, knn_dist, &rel, &infinitesimal):
                 self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank - 1)
                 p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
-                self.U.union(i, rel.endpoint, p, op)
+                pp = self.U.union(i, rel.endpoint, p, op)
+                self._absorb_heap(p, op, pp)
+                self.live_branches.discard(p)
+                self.live_branches.discard(op)
+                if self.branch_heap[pp]:
+                    self.live_branches.add(pp)
 
                 if rel.reciprocity == 0.: # values match
                     warn += 1
@@ -433,8 +667,7 @@ cdef class UniversalReciprocity (object):
                     continue
 
             if self._evaluate_reciprocity(i, self.U.mark_up(i), knn_indices, knn_dist, &rel):
-                heapq.heappush(heap,
-                               (rel.reciprocity, i, rel.endpoint, rel.max_rank))
+                self._set_optimum(i, &rel)
 
         if self.result_edges >= self.num_points - 1:
             self.log.info('Two subjects only')
@@ -448,20 +681,43 @@ cdef class UniversalReciprocity (object):
             self.log.warning('Some distances('+str(infinitesimal)+') are smaller than self.PRECISION ('+str(self.PRECISION)+
                    ') level. Try decreasing double_precision parameter.')
 
-        self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with complex connections.')
+        i = self.num_points
+        while i:
+            i -= 1
+            if self.opt_endpoint[i] < 0:
+                continue
+            p = self.U.mark_up(i)
+            op = self.U.mark_up(self.opt_endpoint[i])
+            if op == p or op != self.opt_target[i]:
+                self._refresh_optimum(i, knn_indices, knn_dist)
+        self._reattach_heaps()
+
+        self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
 ############
-        while self.result_edges < self.num_points - 1 and heap:
+        while self.result_edges < self.num_points - 1 and self.live_branches:
             self._should_stop_mst()
-            rel.reciprocity, i, rel.endpoint, rel.max_rank = heapq.heappop(heap)
-
-            p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
-            if p != op:
-                self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank)
-                p = self.U.union(i, rel.endpoint, p, op)
-                if rel.max_rank == self.max_neighbors_search:
-                    edge_cases+=1
-
-            if self._evaluate_reciprocity(i, p, knn_indices, knn_dist, &rel):
-                heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
+            linked = 0
+            pass_id = 0
+            while pass_id < 2 and not linked:
+                snapshot = list(self.live_branches)
+                for A_obj in snapshot:
+                    A = A_obj
+                    if A not in self.live_branches:
+                        continue
+                    if self._is_local_min(A, knn_indices, knn_dist):
+                        self._link_candidate(&edge_cases, knn_indices, knn_dist)
+                        linked = 1
+                        break
+                if linked:
+                    break
+                snapshot = list(self.live_branches)
+                for A_obj in snapshot:
+                    A = A_obj
+                    if not self._heap_top_valid(A, &dummy_i, &dummy_j, &dummy_v, &dummy_B,
+                                                knn_indices, knn_dist):
+                        self.live_branches.discard(A)
+                pass_id += 1
+            if not linked:
+                break
 
         return edge_cases
