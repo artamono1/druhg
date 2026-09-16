@@ -7,7 +7,7 @@
 
 # Builds spanning tree for druhg algorithm
 # uses dialectics to evaluate reciprocity
-# links per-branch heap tops via a FIFO of branches (not a global min-heap)
+# links per-branch heap tops via FIFO of targeting bulks (not a global min-heap)
 # Author: Pavel Artamonov
 # License: 3-clause BSD
 
@@ -112,9 +112,16 @@ cdef class UniversalReciprocity (object):
         np.intp_t[:] opt_endpoint
         np.intp_t[:] opt_rank
         list branch_heap
-        object branch_queue
+        list bulk_heap
+        object bulk_queue
+        np.ndarray bulk_of_arr
+        np.ndarray bulk_parent_arr
+        np.intp_t[:] bulk_of
+        np.intp_t[:] bulk_parent
+        np.intp_t next_bulk
         np.intp_t out_i
         np.intp_t out_j
+        np.intp_t out_A
         np.double_t out_v
 
     def __init__(self, algorithm, tree,
@@ -443,21 +450,125 @@ cdef class UniversalReciprocity (object):
                     self.branch_heap[lab] = []
             lab += 1
 
-    cdef void _enqueue_live_roots(self) except *:
-        cdef np.intp_t i, p
-        cdef set seen
+    cdef np.intp_t _bulk_root(self, np.intp_t g):
+        cdef np.intp_t p
+
+        if g <= 0:
+            return 0
+        while self.bulk_parent[g] != 0:
+            p = self.bulk_parent[g]
+            g = p
+        return g
+
+    cdef np.intp_t _branch_bulk(self, np.intp_t A):
+        return self._bulk_root(self.bulk_of[A])
+
+    cdef np.intp_t _new_bulk(self):
+        cdef np.intp_t g
+
+        g = self.next_bulk
+        self.next_bulk += 1
+        return g
+
+    cdef np.intp_t _absorb_bulk(self, np.intp_t G, np.intp_t H):
+        cdef list small, large, hg, hh
+        cdef object item
+
+        G = self._bulk_root(G)
+        H = self._bulk_root(H)
+        if G == 0:
+            return H
+        if H == 0 or G == H:
+            return G
+
+        hg = self.bulk_heap[G]
+        hh = self.bulk_heap[H]
+        if len(hg) < len(hh):
+            small = hg
+            large = hh
+            self.bulk_parent[G] = H
+            self.bulk_heap[G] = []
+            self.bulk_heap[H] = large
+            for item in small:
+                heapq.heappush(large, item)
+            return H
+
+        small = hh
+        large = hg
+        self.bulk_parent[H] = G
+        self.bulk_heap[H] = []
+        self.bulk_heap[G] = large
+        for item in small:
+            heapq.heappush(large, item)
+        return G
+
+    cdef void _push_branch_top(self, np.intp_t G, np.intp_t A) except *:
+        G = self._bulk_root(G)
+        if G <= 0:
+            return
+        if self._peek_top(A):
+            heapq.heappush(self.bulk_heap[G], (self.out_v, A))
+
+    cdef np.intp_t _join_target(self, np.intp_t A, np.intp_t B):
+        cdef np.intp_t G, H
+
+        G = self._branch_bulk(A)
+        H = self._branch_bulk(B)
+        if G == 0 and H == 0:
+            G = self._new_bulk()
+            self.bulk_of[A] = G
+            self.bulk_of[B] = G
+            self._push_branch_top(G, A)
+            if A != B:
+                self._push_branch_top(G, B)
+            return G
+        if G == 0:
+            self.bulk_of[A] = H
+            self._push_branch_top(H, A)
+            return H
+        if H == 0:
+            self.bulk_of[B] = G
+            if A != B:
+                self._push_branch_top(G, B)
+            return G
+        if G != H:
+            return self._absorb_bulk(G, H)
+        return G
+
+    cdef void _form_bulks(self) except *:
+        cdef np.intp_t i, A, B, G
+        cdef set seen, seen_bulk
 
         seen = set()
-        self.branch_queue = deque()
         i = self.num_points
         while i:
             i -= 1
-            p = self.U.mark_up(i)
-            if p in seen:
+            A = self.U.mark_up(i)
+            if A in seen:
                 continue
-            seen.add(p)
-            if self.branch_heap[p]:
-                self.branch_queue.append(p)
+            seen.add(A)
+            if not self._peek_top(A):
+                continue
+            B = self.U.mark_up(self.out_j)
+            self._join_target(A, B)
+
+        seen = set()
+        seen_bulk = set()
+        self.bulk_queue = deque()
+        i = self.num_points
+        while i:
+            i -= 1
+            A = self.U.mark_up(i)
+            if A in seen:
+                continue
+            seen.add(A)
+            G = self._branch_bulk(A)
+            if G == 0 or G in seen_bulk:
+                continue
+            if not self.bulk_heap[G]:
+                continue
+            seen_bulk.add(G)
+            self.bulk_queue.append(G)
 
     cdef bint _peek_top(self, np.intp_t A) except *:
         cdef list heap
@@ -470,8 +581,15 @@ cdef class UniversalReciprocity (object):
             top = heap[0]
             v = top[0]
             i = top[1]
+            if i < 0 or i >= self.num_points:
+                heapq.heappop(heap)
+                continue
             j = self.opt_endpoint[i]
             if j < 0:
+                heapq.heappop(heap)
+                continue
+            p = self.U.mark_up(i)
+            if p != A:
                 heapq.heappop(heap)
                 continue
             if self.opt_value[i] != v:
@@ -495,16 +613,22 @@ cdef class UniversalReciprocity (object):
         while heap:
             top = heap[0]
             v, i = top[0], top[1]
+            if i < 0 or i >= self.num_points:
+                heapq.heappop(heap)
+                continue
             j = self.opt_endpoint[i]
             if j < 0:
+                heapq.heappop(heap)
+                continue
+            p = self.U.mark_up(i)
+            if p != A:
                 heapq.heappop(heap)
                 continue
             if A == self.U.mark_up(j):
                 heapq.heappop(heap)
                 rel = Relation(0, 0, 0, 0, 0, 0)
-                parent = self.U.mark_up(i)
                 self._clear_optimum(i)
-                if self._evaluate_reciprocity(i, parent, knn_indices, knn_dist, &rel):
+                if self._evaluate_reciprocity(i, p, knn_indices, knn_dist, &rel):
                     self._set_optimum(i, &rel)
                     heapq.heappush(heap, (self.opt_value[i], i))
                 continue
@@ -513,16 +637,41 @@ cdef class UniversalReciprocity (object):
                 heapq.heappop(heap)
                 heapq.heappush(heap, (self.opt_value[i], i))
                 continue
+            self.out_i = i
+            self.out_j = j
+            self.out_v = v
             return 1
         return 0
 
-    cdef bint _outgoing_blocks(self, np.intp_t B, np.double_t v) except *:
-        # True if B advertises a strictly better outgoing opt
-        if not self._peek_top(B):
-            return 0
-        if self.U.mark_up(self.out_j) == B:
-            return 0
-        return self.out_v < v - self.PRECISION
+    cdef bint _peek_bulk_top(self, np.intp_t G,
+                             knn_indices, knn_dist) except *:
+        cdef list heap
+        cdef np.intp_t A, B
+        cdef np.double_t v
+        cdef object top
+
+        G = self._bulk_root(G)
+        heap = self.bulk_heap[G]
+        while heap:
+            top = heap[0]
+            v = top[0]
+            A = top[1]
+            if not self._peek_top(A):
+                heapq.heappop(heap)
+                continue
+            if self.out_v != v:
+                heapq.heappop(heap)
+                heapq.heappush(heap, (self.out_v, A))
+                continue
+            B = self.U.mark_up(self.out_j)
+            if B == A:
+                heapq.heappop(heap)
+                if self._refresh(A, knn_indices, knn_dist):
+                    heapq.heappush(heap, (self.out_v, A))
+                continue
+            self.out_A = A
+            return 1
+        return 0
 
     cdef np.intp_t _link_branches(self, np.intp_t A, np.intp_t B,
                                   np.intp_t i, np.intp_t j, np.double_t v,
@@ -554,12 +703,11 @@ cdef class UniversalReciprocity (object):
 
     cdef np.intp_t _form_mst(self) except -1:
         # DRUHG
-        # computes DRUHG spanning tree from a FIFO of per-branch heap tops
+        # computes DRUHG spanning tree from a FIFO of targeting bulks
         cdef:
-            np.intp_t i, j, p, op, pp, A, B, C, N, \
-                warn, infinitesimal, edge_cases, round_left, run
+            np.intp_t i, j, p, op, pp, A, B, C, D, G, N, \
+                warn, infinitesimal, edge_cases
             np.double_t v
-            bint reevaluate, made_progress, blocked
 
             Relation rel = Relation(0,0,0,0, 0,0)
 
@@ -574,9 +722,16 @@ cdef class UniversalReciprocity (object):
         self.opt_endpoint = self.opt_endpoint_arr
         self.opt_rank = self.opt_rank_arr
         self.branch_heap = [[] for _ in range(2 * N)]
-        self.branch_queue = deque()
+        self.bulk_heap = [[] for _ in range(2 * N)]
+        self.bulk_of_arr = np.zeros(2 * N, dtype=np.intp)
+        self.bulk_parent_arr = np.zeros(2 * N, dtype=np.intp)
+        self.bulk_of = self.bulk_of_arr
+        self.bulk_parent = self.bulk_parent_arr
+        self.next_bulk = 1
+        self.bulk_queue = deque()
         self.out_i = -1
         self.out_j = -1
+        self.out_A = -1
         self.out_v = INF
 
         edge_cases = 0
@@ -634,46 +789,44 @@ cdef class UniversalReciprocity (object):
                    ') level. Try decreasing double_precision parameter.')
 
         self._reattach_heaps()
-        self._enqueue_live_roots()
+        self._form_bulks()
 
         self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
 ############
-        round_left = len(self.branch_queue)
-        self.logger.info(f'branches {len(self.branch_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
-        made_progress = 0
-        reevaluate = 0
-        while self.result_edges < self.num_points - 1 and self.branch_queue:
+        self.logger.info(f'bulks {len(self.bulk_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
+        while self.result_edges < self.num_points - 1 and self.bulk_queue:
             self._should_stop_mst()
-            if round_left == 0:
-                if made_progress == 0:
-                    break
-                made_progress = 0
-                round_left = len(self.branch_queue)
-                if round_left == 0:
-                    break
-                self.logger.info(f'branches {len(self.branch_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
-
-            round_left -= 1
-
-            A = self.branch_queue.popleft()
-            Aheap = self.branch_heap[A]
-            if not Aheap or A != self.U.mark_up(Aheap[0][1]):
+            G = self._bulk_root(self.bulk_queue.popleft())
+            if G == 0 or not self._peek_bulk_top(G, knn_indices, knn_dist):
                 continue
-            v, i = Aheap[0]
-            j = self.opt_endpoint[i]
-            assert (j>=0)
+
+            A = self.out_A
+            i = self.out_i
+            j = self.out_j
+            v = self.out_v
             B = self.U.mark_up(j)
-            assert(B!=self.U.mark_up(i))
-            Bheap = self.branch_heap[B]
-            if Bheap and v > Bheap[0][0] + self.PRECISION:
-                self.branch_queue.append(A)
+            if B == A:
+                heapq.heappop(self.bulk_heap[G])
+                if self.bulk_heap[G]:
+                    self.bulk_queue.append(G)
+                continue
+            if self._branch_bulk(B) != G:
+                G = self._join_target(A, B)
+                self.bulk_queue.append(G)
                 continue
 
-            made_progress = 1
+            heapq.heappop(self.bulk_heap[G])
             C = self._link_branches(A, B, i, j, v, &edge_cases)
+            self.bulk_of[C] = self._bulk_root(G)
             if self._refresh(C, knn_indices, knn_dist):
-                self.branch_queue.append(C)
+                D = self.U.mark_up(self.out_j)
+                if D != C:
+                    G = self._join_target(C, D)
+                self._push_branch_top(G, C)
+                self.bulk_queue.append(G)
+            elif self.bulk_heap[G]:
+                self.bulk_queue.append(G)
 
-        self.logger.info(f'branches {len(self.branch_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
+        self.logger.info(f'bulks {len(self.bulk_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
 
         return edge_cases
