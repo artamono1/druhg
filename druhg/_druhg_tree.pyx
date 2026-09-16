@@ -5,8 +5,9 @@
 # cython: initializedcheck=False
 # cython: cdivision=True
 
-# Builds minimum spanning tree for druhg algorithm
+# Builds spanning tree for druhg algorithm
 # uses dialectics to evaluate reciprocity
+# links per-branch heap tops via a FIFO of branches (not a global min-heap)
 # Author: Pavel Artamonov
 # License: 3-clause BSD
 
@@ -27,6 +28,7 @@ from ._druhg_unionfind cimport UnionFind
 from ._druhg_pairwise import PairwiseDistanceTreeSparse, PairwiseDistanceTreeGeneric
 
 import _heapq as heapq
+from collections import deque
 
 import bisect
 
@@ -99,6 +101,18 @@ cdef class UniversalReciprocity (object):
         np.double_t t_last_progress
         bint interrupted
         object interrupt_reason
+
+        np.ndarray opt_value_arr
+        np.ndarray opt_endpoint_arr
+        np.ndarray opt_rank_arr
+        np.double_t[:] opt_value
+        np.intp_t[:] opt_endpoint
+        np.intp_t[:] opt_rank
+        list branch_heap
+        object branch_queue
+        np.intp_t out_i
+        np.intp_t out_j
+        np.double_t out_v
 
     def __init__(self, algorithm, tree,
                  buffer_uf, buffer_fast, buffer_values,
@@ -318,16 +332,16 @@ cdef class UniversalReciprocity (object):
             assert(dis > self.PRECISION)
 
             odistances = knn_dist[j]
-            if odistances[r] > dis + self.PRECISION: # outlier part has more information
-                continue
+            # if odistances[r] > dis + self.PRECISION: # outlier part has more information
+                # continue
 
             rank = r + 1
             while rank < self.max_neighbors_search and distances[rank] <= dis + self.PRECISION:
                 self.ball.add(indices[rank])
                 rank += 1
 
-            if odistances[rank-1] > dis + self.PRECISION: # outlier part has more information
-                continue
+            # if odistances[rank-1] > dis + self.PRECISION: # outlier part has more information
+                # continue
 
             oindices = knn_indices[j]
             orank = 0
@@ -336,10 +350,10 @@ cdef class UniversalReciprocity (object):
                 inter += oindices[orank] != i and oindices[orank] in self.ball
                 orank += 1
 
-            assert(rank <= orank)
+            # assert(rank <= orank)
 
-            if rank == orank and i < j:
-                continue
+            # if rank == orank and i < j:
+                # continue
 
             v1 = max(distances[orank - 1] + self.PRECISION,  dis * rank / (orank - inter)) # со своей стороны r<=oR
             v2 = max(odistances[rank - 1] + self.PRECISION,  dis * orank / (rank - inter)) # с чужой стороны
@@ -363,6 +377,161 @@ cdef class UniversalReciprocity (object):
         rel.reciprocity = best
         return res
 
+    cdef np.intp_t _component_root(self, np.intp_t p):
+        cdef np.intp_t parent
+
+        while True:
+            parent = self.U.parent_arr[p]
+            if parent == 0:
+                return p
+            p = parent
+
+    cdef void _clear_optimum(self, np.intp_t i):
+        self.opt_value[i] = INF
+        self.opt_endpoint[i] = -1
+        self.opt_rank[i] = 0
+
+    cdef void _set_optimum(self, np.intp_t i, Relation* rel) except *:
+        cdef np.intp_t p
+
+        self.opt_value[i] = rel.reciprocity
+        self.opt_endpoint[i] = rel.endpoint
+        self.opt_rank[i] = <np.intp_t> rel.max_rank
+
+
+    cdef void _absorb_heap(self, np.intp_t A, np.intp_t B, np.intp_t C) except *:
+        cdef list small, large, ha, hb
+        cdef object item
+
+        ha = self.branch_heap[A]
+        hb = self.branch_heap[B]
+        if len(ha) < len(hb):
+            small = ha
+            large = hb
+        else:
+            small = hb
+            large = ha
+        for item in small:
+            heapq.heappush(large, item)
+        self.branch_heap[C] = large
+        if A != C:
+            self.branch_heap[A] = []
+        if B != C:
+            self.branch_heap[B] = []
+
+    cdef void _reattach_heaps(self) except *:
+        cdef np.intp_t lab, root, n
+        cdef object item
+
+        n = 2 * self.num_points
+        lab = 0
+        while lab < n:
+            if self.branch_heap[lab]:
+                root = self._component_root(lab)
+                if root != lab:
+                    for item in self.branch_heap[lab]:
+                        heapq.heappush(self.branch_heap[root], item)
+                    self.branch_heap[lab] = []
+            lab += 1
+
+    cdef void _enqueue_live_roots(self) except *:
+        cdef np.intp_t i, p
+        cdef set seen
+
+        seen = set()
+        self.branch_queue = deque()
+        i = self.num_points
+        while i:
+            i -= 1
+            p = self.U.mark_up(i)
+            if p in seen:
+                continue
+            seen.add(p)
+            if self.branch_heap[p]:
+                self.branch_queue.append(p)
+
+    cdef bint _peek_top(self, np.intp_t A) except *:
+        cdef list heap
+        cdef np.intp_t i, j, p
+        cdef np.double_t v
+        cdef object top
+
+        heap = self.branch_heap[A]
+        while heap:
+            top = heap[0]
+            v = top[0]
+            i = top[1]
+            j = self.opt_endpoint[i]
+            if j < 0:
+                heapq.heappop(heap)
+                continue
+            if self.opt_value[i] != v:
+                heapq.heappop(heap)
+                heapq.heappush(heap, (self.opt_value[i], i))
+                continue
+            self.out_i = i
+            self.out_j = j
+            self.out_v = v
+            return 1
+        return 0
+
+    cdef bint _peek_top_and_refresh(self, np.intp_t A, knn_indices, knn_dist) except *:
+        cdef list heap
+        cdef np.intp_t i, j, p
+        cdef np.double_t v
+        cdef object top
+        cdef Relation rel
+
+        heap = self.branch_heap[A]
+        A = self._component_root(A)
+        while heap:
+            top = heap[0]
+            v, i = top[0], top[1]
+            j = self.opt_endpoint[i]
+            if j < 0:
+                heapq.heappop(heap)
+                continue
+            if A == self.U.mark_up(j):
+                heapq.heappop(heap)
+                rel = Relation(0, 0, 0, 0, 0, 0)
+                parent = self.U.mark_up(i)
+                self._clear_optimum(i)
+                if self._evaluate_reciprocity(i, parent, knn_indices, knn_dist, &rel):
+                    self._set_optimum(i, &rel)
+                    heapq.heappush(heap, (self.opt_value[i], i))
+                continue
+
+            if self.opt_value[i] != v:
+                heapq.heappop(heap)
+                heapq.heappush(heap, (self.opt_value[i], i))
+                continue
+            self.out_i = i
+            self.out_j = j
+            self.out_v = v
+            return 1
+        return 0
+
+    cdef bint _outgoing_blocks(self, np.intp_t B, np.double_t v) except *:
+        # True if B advertises a strictly better outgoing opt
+        if not self._peek_top(B):
+            return 0
+        if self.U.mark_up(self.out_j) == B:
+            return 0
+        return self.out_v < v - self.PRECISION
+
+    cdef np.intp_t _link_branches(self, np.intp_t A, np.intp_t B,
+                                  np.intp_t i, np.intp_t j, np.double_t v,
+                                  np.intp_t* edge_cases):
+        cdef np.intp_t C, rank
+
+        rank = self.opt_rank[i]
+        self.result_write(v, i, j, rank)
+        C = self.U.union(i, j, A, B)
+        if rank == self.max_neighbors_search:
+            edge_cases[0] += 1
+        self._absorb_heap(A, B, C)
+        return C
+
     cdef void _compute_tree_edges(self) except *:
         cdef np.intp_t edge_cases
 
@@ -380,18 +549,30 @@ cdef class UniversalReciprocity (object):
 
     cdef np.intp_t _form_mst(self) except -1:
         # DRUHG
-        # computes DRUHG Spanning Tree
-        # uses heap
+        # computes DRUHG spanning tree from a FIFO of per-branch heap tops
         cdef:
-            np.intp_t i, \
-                warn, infinitesimal, edge_cases
+            np.intp_t i, j, p, op, pp, A, B, C, N, \
+                warn, infinitesimal, edge_cases, round_left, run
+            np.double_t v
+            bint reevaluate, made_progress, blocked
 
             Relation rel = Relation(0,0,0,0, 0,0)
 
             np.ndarray[np.double_t, ndim=2] knn_dist
             np.ndarray[np.intp_t, ndim=2] knn_indices
 
-            list heap
+        N = self.num_points
+        self.opt_value_arr = np.full(N, INF)
+        self.opt_endpoint_arr = np.full(N, -1, dtype=np.intp)
+        self.opt_rank_arr = np.zeros(N, dtype=np.intp)
+        self.opt_value = self.opt_value_arr
+        self.opt_endpoint = self.opt_endpoint_arr
+        self.opt_rank = self.opt_rank_arr
+        self.branch_heap = [[] for _ in range(2 * N)]
+        self.branch_queue = deque()
+        self.out_i = -1
+        self.out_j = -1
+        self.out_v = INF
 
         edge_cases = 0
         self.log.knn_query_start(
@@ -406,12 +587,10 @@ cdef class UniversalReciprocity (object):
         self.log.knn_query_done()
         self._should_stop_mst()
 
-        heap = []
 #### Initialization and pure reciprocity (ranks equal)
         self.logger.info(f'MSTree formation: initializing nearest connections. Pure autoconnect.')
         warn, infinitesimal = 0, 0
 
-        # if self.tree.data.shape[0] > 16384 and self.n_jobs > 1: # multicore 2-3x speed up for big datasets
         i = self.num_points
         while i:
             self._should_stop_mst()
@@ -422,7 +601,8 @@ cdef class UniversalReciprocity (object):
             if self._pure_reciprocity(i, knn_indices, knn_dist, &rel, &infinitesimal):
                 self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank - 1)
                 p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
-                self.U.union(i, rel.endpoint, p, op)
+                pp = self.U.union(i, rel.endpoint, p, op)
+                self._absorb_heap(p, op, pp)
 
                 if rel.reciprocity == 0.: # values match
                     warn += 1
@@ -433,8 +613,8 @@ cdef class UniversalReciprocity (object):
                     continue
 
             if self._evaluate_reciprocity(i, self.U.mark_up(i), knn_indices, knn_dist, &rel):
-                heapq.heappush(heap,
-                               (rel.reciprocity, i, rel.endpoint, rel.max_rank))
+                self._set_optimum(i, &rel)
+                heapq.heappush(self.branch_heap[self.U.mark_up(i)], (rel.reciprocity, i))
 
         if self.result_edges >= self.num_points - 1:
             self.log.info('Two subjects only')
@@ -448,20 +628,60 @@ cdef class UniversalReciprocity (object):
             self.log.warning('Some distances('+str(infinitesimal)+') are smaller than self.PRECISION ('+str(self.PRECISION)+
                    ') level. Try decreasing double_precision parameter.')
 
-        self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with complex connections.')
+        self._reattach_heaps()
+        self._enqueue_live_roots()
+
+        self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
 ############
-        while self.result_edges < self.num_points - 1 and heap:
+        round_left = len(self.branch_queue)
+        made_progress = 0
+        reevaluate = 0
+        while self.result_edges < self.num_points - 1 and self.branch_queue:
             self._should_stop_mst()
-            rel.reciprocity, i, rel.endpoint, rel.max_rank = heapq.heappop(heap)
+            if round_left == 0:
+                if reevaluate and not made_progress:
+                    break
+                reevaluate = not reevaluate
+                made_progress = 0
+                round_left = len(self.branch_queue)
+                if round_left == 0:
+                    break
+            round_left -= 1
 
-            p, op = self.U.mark_up(i), self.U.mark_up(rel.endpoint)
-            if p != op:
-                self.result_write(rel.reciprocity, i, rel.endpoint, rel.max_rank)
-                p = self.U.union(i, rel.endpoint, p, op)
-                if rel.max_rank == self.max_neighbors_search:
-                    edge_cases+=1
+            A = self.branch_queue.popleft()
 
-            if self._evaluate_reciprocity(i, p, knn_indices, knn_dist, &rel):
-                heapq.heappush(heap, (rel.reciprocity, i, rel.endpoint, rel.max_rank))
+            if reevaluate:
+                if not self._peek_top_and_refresh(A, knn_indices, knn_dist):
+                    continue
+                i = self.out_i
+                j = self.out_j
+                v = self.out_v
+                B = self.U.mark_up(j)
+                assert(B!=self.U.mark_up(i))
+                Bheap = self.branch_heap[B]
+                if Bheap and v > Bheap[0][0] + self.PRECISION:
+                    if A == self.U.mark_up(i):
+                        self.branch_queue.append(A)
+                    continue
+
+            elif not self._peek_top(A):
+                continue
+            else:
+                i = self.out_i
+                j = self.out_j
+                v = self.out_v
+                B = self.U.mark_up(j)
+                if B==self.U.mark_up(i):
+                    self.branch_queue.append(A)
+                    continue
+
+                Bheap = self.branch_heap[B]
+                if Bheap and v > Bheap[0][0] + self.PRECISION:
+                    self.branch_queue.append(A)
+                    continue
+
+            C = self._link_branches(A, B, i, j, v, &edge_cases)
+            self.branch_queue.append(C)
+            made_progress = 1
 
         return edge_cases
