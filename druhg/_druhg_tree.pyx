@@ -88,6 +88,9 @@ cdef class UniversalReciprocity (object):
         UnionFind U
         set ball
 
+        np.intp_t count_evaluations
+        np.intp_t count_inner_evaluations
+
         np.intp_t result_edges
         np.ndarray result_values_arr
         np.ndarray result_pairs_arr
@@ -125,6 +128,8 @@ cdef class UniversalReciprocity (object):
         self.log = TreeLogging()
         self.logger = self.log.logger
         self.logger_debug = self.log.debug_enabled
+        self.count_evaluations = 0
+        self.count_inner_evaluations = 0
 
         self.PRECISION = kwargs.get('double_precision', 0.0000001)  # relevant if distances are tiny
         self.n_jobs = n_jobs
@@ -313,6 +318,8 @@ cdef class UniversalReciprocity (object):
             np.double_t[:] distances
             np.double_t[:] odistances
 
+        self.count_evaluations += 1
+
         indices = knn_indices[i]
         distances = knn_dist[i]
 
@@ -330,6 +337,8 @@ cdef class UniversalReciprocity (object):
             if self.U.is_same_parent(parent, j):
                 continue
             assert(dis > self.PRECISION)
+
+            self.count_inner_evaluations += 1
 
             odistances = knn_dist[j]
             # if odistances[r] > dis + self.PRECISION: # outlier part has more information
@@ -475,7 +484,7 @@ cdef class UniversalReciprocity (object):
             return 1
         return 0
 
-    cdef bint _peek_top_and_refresh(self, np.intp_t A, knn_indices, knn_dist) except *:
+    cdef bint _refresh(self, np.intp_t A, knn_indices, knn_dist) except *:
         cdef list heap
         cdef np.intp_t i, j, p
         cdef np.double_t v
@@ -483,7 +492,6 @@ cdef class UniversalReciprocity (object):
         cdef Relation rel
 
         heap = self.branch_heap[A]
-        A = self._component_root(A)
         while heap:
             top = heap[0]
             v, i = top[0], top[1]
@@ -505,9 +513,6 @@ cdef class UniversalReciprocity (object):
                 heapq.heappop(heap)
                 heapq.heappush(heap, (self.opt_value[i], i))
                 continue
-            self.out_i = i
-            self.out_j = j
-            self.out_v = v
             return 1
         return 0
 
@@ -634,54 +639,41 @@ cdef class UniversalReciprocity (object):
         self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
 ############
         round_left = len(self.branch_queue)
+        self.logger.info(f'branches {len(self.branch_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
         made_progress = 0
         reevaluate = 0
         while self.result_edges < self.num_points - 1 and self.branch_queue:
             self._should_stop_mst()
             if round_left == 0:
-                if reevaluate and not made_progress:
+                if made_progress == 0:
                     break
-                reevaluate = not reevaluate
                 made_progress = 0
                 round_left = len(self.branch_queue)
                 if round_left == 0:
                     break
+                self.logger.info(f'branches {len(self.branch_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
+
             round_left -= 1
 
             A = self.branch_queue.popleft()
-
-            if reevaluate:
-                if not self._peek_top_and_refresh(A, knn_indices, knn_dist):
-                    continue
-                i = self.out_i
-                j = self.out_j
-                v = self.out_v
-                B = self.U.mark_up(j)
-                assert(B!=self.U.mark_up(i))
-                Bheap = self.branch_heap[B]
-                if Bheap and v > Bheap[0][0] + self.PRECISION:
-                    if A == self.U.mark_up(i):
-                        self.branch_queue.append(A)
-                    continue
-
-            elif not self._peek_top(A):
+            Aheap = self.branch_heap[A]
+            if not Aheap or A != self.U.mark_up(Aheap[0][1]):
                 continue
-            else:
-                i = self.out_i
-                j = self.out_j
-                v = self.out_v
-                B = self.U.mark_up(j)
-                if B==self.U.mark_up(i):
-                    self.branch_queue.append(A)
-                    continue
+            v, i = Aheap[0]
+            j = self.opt_endpoint[i]
+            assert (j>=0)
+            B = self.U.mark_up(j)
+            assert(B!=self.U.mark_up(i))
+            Bheap = self.branch_heap[B]
+            if Bheap and v > Bheap[0][0] + self.PRECISION:
+                self.branch_queue.append(A)
+                continue
 
-                Bheap = self.branch_heap[B]
-                if Bheap and v > Bheap[0][0] + self.PRECISION:
-                    self.branch_queue.append(A)
-                    continue
-
-            C = self._link_branches(A, B, i, j, v, &edge_cases)
-            self.branch_queue.append(C)
             made_progress = 1
+            C = self._link_branches(A, B, i, j, v, &edge_cases)
+            if self._refresh(C, knn_indices, knn_dist):
+                self.branch_queue.append(C)
+
+        self.logger.info(f'branches {len(self.branch_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
 
         return edge_cases
