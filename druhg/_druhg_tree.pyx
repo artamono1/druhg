@@ -777,15 +777,17 @@ cdef class UniversalReciprocity (object):
         run = 0
         # self.logger.info(f'bulks {len(self.bulk_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
         while self.result_edges < self.num_points - 1 and self.bulk_queue:
+            if run == 0:
+                self.logger.info(f'bulks {len(self.bulk_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
+                run = len(self.bulk_queue)
+            run-=1
+
             self._should_stop_mst()
 
-            # if run == 0:
-            #     self.logger.info(f'bulks {len(self.bulk_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
-            #     run = len(self.bulk_queue)
-            # run-=1
-
             G = self.bulk_queue.popleft()
-            if G == 0 or G != self.B.mark_up(G) or not self._peek_bulk_top(G, knn_indices, knn_dist):
+            if G != self.B.mark_up(G):
+                continue
+            if G == 0 or not self._peek_bulk_top(G, knn_indices, knn_dist):
                 continue
 
             A = self.out_A
