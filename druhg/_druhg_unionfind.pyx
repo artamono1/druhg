@@ -89,3 +89,78 @@ cdef class UnionFind:
 
         self.next_label += 1
         return pp
+
+
+cdef class BulkUnionFind:
+    """Parallel union-find for MST targeting bulks (tree-phase only)."""
+
+    def __init__(self, np.intp_t N, buffer_parents, buffer_fast):
+        self.capacity = 2 * N
+        self.next_label = 1
+
+        self.parent_arr = buffer_parents
+        self.parent = NULL
+        self.fast_arr = buffer_fast
+
+        if buffer_parents is None:
+            logging.getLogger(__package__).error('bulk buffer was not provided')
+            return
+        elif len(self.parent_arr) < self.capacity:
+            logging.getLogger(__package__).error(
+                'bulk parent_arr is too small %s %s', len(self.parent_arr), self.capacity)
+            return
+        else:
+            self.parent = (<np.intp_t *> self.parent_arr.data)
+
+        if buffer_fast is None:
+            logging.getLogger(__package__).error('bulk fast buffer was not provided')
+            return
+        elif len(self.fast_arr) < self.capacity:
+            logging.getLogger(__package__).error(
+                'bulk fast_arr is too small %s %s', len(self.fast_arr), self.capacity)
+            return
+        else:
+            self.fast : np.intp_t[:] = self.fast_arr
+
+    cdef np.intp_t nullify(self):
+        self.parent_arr[:self.capacity] = 0
+        self.fast_arr[:self.capacity] = 0
+        self.next_label = 1
+        return 0
+
+    cdef np.intp_t new_label(self):
+        cdef np.intp_t g
+
+        g = self.next_label
+        self.next_label += 1
+        if g >= self.capacity:
+            logging.getLogger(__package__).error(
+                'bulk labels exhausted %s %s', g, self.capacity)
+            return 0
+        self.fast[g] = g
+        return g
+
+    cdef np.intp_t mark_up(self, np.intp_t n):
+        cdef np.intp_t p
+
+        if n <= 0:
+            return 0
+        p = self.fast[n]
+        if p <= 0:
+            p = n
+        while self.parent[p] != 0:
+            assert p != self.parent[p]
+            p = self.parent[p]
+
+        self.fast[n] = p
+        return p
+
+    cdef np.intp_t union(self, np.intp_t n, np.intp_t on, np.intp_t p, np.intp_t op):
+        cdef np.intp_t pp
+
+        pp = self.new_label()
+        if pp == 0:
+            return 0
+        self.fast[n] = self.fast[on] = pp
+        self.parent[p] = self.parent[op] = pp
+        return pp

@@ -31,3 +31,20 @@ cdef class UnionFind:
         np.intp_t mark_up(self, np.intp_t n)
         np.intp_t is_same_parent(self, np.intp_t p, np.intp_t on)
         np.intp_t union(self, np.intp_t n, np.intp_t on, np.intp_t p, np.intp_t op)
+
+
+cdef class BulkUnionFind:
+    cdef:
+        np.intp_t capacity
+        np.ndarray parent_arr
+        np.intp_t *parent
+        np.ndarray fast_arr
+        np.intp_t[:] fast
+
+        np.intp_t next_label
+
+    cdef:
+        np.intp_t nullify(self)
+        np.intp_t new_label(self)
+        np.intp_t mark_up(self, np.intp_t n)
+        np.intp_t union(self, np.intp_t n, np.intp_t on, np.intp_t p, np.intp_t op)
