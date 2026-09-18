@@ -147,27 +147,27 @@ class TreeLogging(object):
         self.end_progress_line()
         self.logger.error(msg, *args)
 
-    def note_interrupt(self, reason, result_edges, num_points):
+    def note_interrupt(self, reason, num_bulks, result_edges, num_points):
         total, pct = _edge_progress(result_edges, num_points)
         self.warning(
-            'MSTree formation: interruption started (%s) after %s edges %.2f%% of %s.',
-            reason, result_edges, pct, total)
+            'MSTree formation: interruption started (%s) after %s bulks, %s edges %.2f%% of %s.',
+            reason, num_bulks, result_edges, pct, total)
 
-    def _inplace_status(self, result_edges, total, pct, elapsed, hint):
-        return 'MSTree formation: %s/%s edges (%.1f%%) %.1fs  %s' % (
-            result_edges, total, pct, elapsed, hint)
+    def _inplace_status(self, num_bulks, result_edges, total, pct, elapsed, hint):
+        return 'MSTree formation: %s bulks, %s/%s edges (%.1f%%) %.1fs  %s' % (
+            num_bulks, result_edges, total, pct, elapsed, hint)
 
-    def prompt_progress(self, result_edges, num_points, elapsed):
+    def prompt_progress(self, num_bulks, result_edges, num_points, elapsed):
         total, pct = _edge_progress(result_edges, num_points)
         self.saw_heartbeat = True
         if self.is_tty or self.jupyter_progress is not None:
             hint = 'Ctrl+C stops MST' if self.is_tty else 'Interrupt kernel stops MST'
             self.write_inplace_status(
-                self._inplace_status(result_edges, total, pct, elapsed, hint))
+                self._inplace_status(num_bulks, result_edges, total, pct, elapsed, hint))
             return
         self.logger.warning(
-            'MSTree formation: %s edges %.2f%% of %s after %.1fs. Still working. %s',
-            result_edges, pct, total, elapsed, _WAIT_HINT)
+            'MSTree formation: %s bulks, %s edges %.2f%% of %s after %.1fs. Still working. %s',
+            num_bulks, result_edges, pct, total, elapsed, _WAIT_HINT)
 
     def knn_query_start(self, max_neighbors_search, num_points, show_progress):
         head = 'kNN querying: %s neighbors for %s points.' % (
@@ -185,7 +185,7 @@ class TreeLogging(object):
     def knn_query_done(self):
         self.info('kNN querying: done')
 
-    def finish_mst(self, interrupted, interrupt_reason, result_edges, num_points,
+    def finish_mst(self, interrupted, interrupt_reason, num_bulks, result_edges, num_points,
                    edge_cases, max_neighbors_search, elapsed=0.):
         total, pct = _edge_progress(result_edges, num_points)
         if interrupted:
@@ -194,23 +194,23 @@ class TreeLogging(object):
             else:
                 suffix = 'Partial forest. Continuing to labeling.'
             self.warning(
-                'MSTree formation: interruption result: %s edges %.2f%% of %s (%s). %s',
-                result_edges, pct, total, interrupt_reason, suffix)
+                'MSTree formation: interruption result: %s bulks, %s edges %.2f%% of %s (%s). %s',
+                num_bulks, result_edges, pct, total, interrupt_reason, suffix)
         elif self.saw_heartbeat:
             if self.is_tty or self.jupyter_progress is not None:
                 self.write_inplace_status(
                     self._inplace_status(
-                        result_edges, total, pct, elapsed,
+                        num_bulks, result_edges, total, pct, elapsed,
                         'Done. Continue labeling'))
                 self.end_progress_line()
             else:
                 self.logger.warning(
-                    'MSTree formation: %s edges %.2f%% of %s after %.1fs. Done. Continue labeling.',
-                    result_edges, pct, total, elapsed)
+                    'MSTree formation: %s bulks, %s edges %.2f%% of %s after %.1fs. Done. Continue labeling.',
+                    num_bulks, result_edges, pct, total, elapsed)
         else:
             self.info(
-                'MSTree formation: %s edges %.2f%%. Done.',
-                result_edges, 100. * result_edges / num_points)
+                'MSTree formation: %s bulks, %s edges %.2f%%. Done.',
+                num_bulks, result_edges, 100. * result_edges / num_points)
         if result_edges != num_points - 1:
             self.info(
                 '%s not connected edges of %s. It is a forest. Try increasing max_neighbors(max_ranking) value %s for a better result.',

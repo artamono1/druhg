@@ -6,7 +6,7 @@
 # cython: cdivision=True
 
 # Typed (float key, int payload) min-heap for MST targeting bulks.
-# Author: Pavel Artamonov
+# Author: AI generated
 # License: 3-clause BSD
 
 import numpy as np

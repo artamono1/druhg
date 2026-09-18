@@ -93,12 +93,14 @@ cdef class UniversalReciprocity (object):
 
         UnionFind U
         UnionFind B
+
+        list bulk_heap
+        object bulk_queue
+        np.intp_t num_bulks
+
         np.ndarray ball_stamp_arr
         np.uint32_t[::1] ball_stamp
         np.uint32_t ball_gen
-
-        np.intp_t count_evaluations
-        np.intp_t count_inner_evaluations
 
         np.intp_t result_edges
         np.ndarray result_values_arr
@@ -120,28 +122,21 @@ cdef class UniversalReciprocity (object):
         np.double_t[:] opt_values
         np.intp_t[:] opt_endpoints
         np.intp_t[:] opt_rank
-        list bulk_heap
-        object bulk_queue
-        np.ndarray bulk_of_arr
-        np.intp_t[:] bulk_of
+
         np.intp_t out_i
         np.intp_t out_j
-        np.intp_t out_A
         np.double_t out_v
 
     def __init__(self, algorithm, tree,
                  buffer_uf, buffer_fast, buffer_values,
                  max_neighbors_search=16, metric='euclidean', leaf_size=20, n_jobs=4,
                  buffer_ranks=None, buffer_edgepairs=None,
-                 buffer_clusters=None,
                  progress_interval=None,
                  **kwargs):
 
         self.log = TreeLogging()
         self.logger = self.log.logger
         self.logger_debug = self.log.debug_enabled
-        self.count_evaluations = 0
-        self.count_inner_evaluations = 0
 
         self.PRECISION = kwargs.get('double_precision', 0.0000001)  # relevant if distances are tiny
         self.n_jobs = n_jobs
@@ -183,6 +178,7 @@ cdef class UniversalReciprocity (object):
         self.U.nullify()
 
         self.result_edges = 0
+        self.num_bulks = -1
 
         self.result_values_arr = buffer_values
         if len(self.result_values_arr) < self.num_points - 1:
@@ -218,11 +214,11 @@ cdef class UniversalReciprocity (object):
             return
         self.interrupted = 1
         self.interrupt_reason = reason
-        self.log.note_interrupt(reason, self.result_edges, self.num_points)
+        self.log.note_interrupt(reason, self.num_bulks, self.result_edges, self.num_points)
 
     cdef void _prompt_progress(self) except *:
         self.log.prompt_progress(
-            self.result_edges, self.num_points, time.monotonic() - self.t0)
+            self.num_bulks, self.result_edges, self.num_points, time.monotonic() - self.t0)
         self.t_last_progress = time.monotonic()
 
     cdef void _should_stop_mst(self) except *:
@@ -243,6 +239,7 @@ cdef class UniversalReciprocity (object):
     cdef void _finish_mst(self, np.intp_t edge_cases) except *:
         self.log.finish_mst(
             self.interrupted, self.interrupt_reason,
+            self.num_bulks,
             self.result_edges, self.num_points,
             edge_cases, self.max_neighbors_search,
             time.monotonic() - self.t0)
@@ -335,8 +332,6 @@ cdef class UniversalReciprocity (object):
             np.double_t[:] distances
             np.double_t[:] odistances
 
-        self.count_evaluations += 1
-
         indices = knn_indices[i]
         distances = knn_dist[i]
 
@@ -359,19 +354,12 @@ cdef class UniversalReciprocity (object):
                 continue
             assert(dis > self.PRECISION)
 
-            self.count_inner_evaluations += 1
-
             odistances = knn_dist[j]
-            # if odistances[r] > dis + self.PRECISION: # outlier part has more information
-                # continue
 
             rank = r + 1
             while rank < self.max_neighbors_search and distances[rank] <= dis + self.PRECISION:
                 self.ball_stamp[indices[rank]] = self.ball_gen
                 rank += 1
-
-            # if odistances[rank-1] > dis + self.PRECISION: # outlier part has more information
-                # continue
 
             oindices = knn_indices[j]
             orank = 0
@@ -379,11 +367,6 @@ cdef class UniversalReciprocity (object):
             while orank < self.max_neighbors_search and odistances[orank] <= dis + self.PRECISION:
                 inter += oindices[orank] != i and self.ball_stamp[oindices[orank]] == self.ball_gen
                 orank += 1
-
-            # assert(rank <= orank)
-
-            # if rank == orank and i < j:
-                # continue
 
             v1 = max(distances[orank - 1] + self.PRECISION,  dis * rank / (orank - inter)) # со своей стороны r<=oR
             v2 = max(odistances[rank - 1] + self.PRECISION,  dis * orank / (rank - inter)) # с чужой стороны
@@ -422,6 +405,9 @@ cdef class UniversalReciprocity (object):
 
         ha = self.bulk_heap[A]
         hb = self.bulk_heap[B]
+        self.bulk_heap[A] = None
+        self.bulk_heap[B] = None
+
         assert(ha is not None)
         assert(hb is not None)
         if ha.size < hb.size:
@@ -433,16 +419,15 @@ cdef class UniversalReciprocity (object):
 
         large.extend_from(small)
         self.bulk_heap[C] = large
-        assert (A != C)
-        assert (B != C)
-        self.bulk_heap[A] = None
-        self.bulk_heap[B] = None
 
     cdef void _absorb_heap_init(self, np.intp_t A, np.intp_t B, np.intp_t C) except *:
         cdef FloatIntMinHeap small, large, ha, hb
 
         ha = self.bulk_heap[A]
         hb = self.bulk_heap[B]
+        self.bulk_heap[A] = None
+        self.bulk_heap[B] = None
+
         if ha is None and hb is None:
             self.bulk_heap[C] = FloatIntMinHeap()
         elif ha is None:
@@ -458,8 +443,6 @@ cdef class UniversalReciprocity (object):
                 large = ha
             large.extend_from(small)
             self.bulk_heap[C] = large
-        self.bulk_heap[A] = None
-        self.bulk_heap[B] = None
 
     cdef bint _refresh(self, np.intp_t A, knn_indices, knn_dist) except *:
         cdef FloatIntMinHeap heap
@@ -470,6 +453,8 @@ cdef class UniversalReciprocity (object):
         heap = self.bulk_heap[A]
         assert(heap is not None)
         while heap.size:
+            self._should_stop_mst()
+
             v = heap.keys[0]
             i = heap.vals[0]
             assert(i>=0)
@@ -533,9 +518,8 @@ cdef class UniversalReciprocity (object):
         self.opt_values = self.opt_values_arr
         self.opt_endpoints = self.opt_endpoints_arr
         self.opt_rank = self.opt_rank_arr
+
         self.bulk_heap = [None for _ in range(2 * N)]
-        self.bulk_of_arr = np.zeros(2 * N, dtype=np.intp)
-        self.bulk_of = self.bulk_of_arr
         self.B = UnionFind(
             self.num_points,
             np.zeros(2 * N, dtype=np.intp),
@@ -545,7 +529,6 @@ cdef class UniversalReciprocity (object):
         self.bulk_queue = deque()
         self.out_i = -1
         self.out_j = -1
-        self.out_A = -1
         self.out_v = INF
 
         edge_cases = 0
@@ -562,9 +545,8 @@ cdef class UniversalReciprocity (object):
         self.log.knn_query_done()
         self._should_stop_mst()
 
-        self.bulk_queue = deque()
 #### Initialization and pure reciprocity (ranks equal)
-        self.logger.info(f'MSTree formation: initializing nearest connections. Pure autoconnect.')
+        self.log.info(f'MSTree formation: initializing nearest connections. Pure autoconnect.')
         warn, infinitesimal = 0, 0
 
         i = self.num_points
@@ -616,25 +598,22 @@ cdef class UniversalReciprocity (object):
             self.log.info(
             'A lot of values('+str(warn)+') are the same. Try increasing max_neighbors_search('+str(self.max_neighbors_search)+
             ') parameter.')
-
         if infinitesimal > 0:
             self.log.warning('Some distances('+str(infinitesimal)+') are smaller than self.PRECISION ('+str(self.PRECISION)+
                    ') level. Try decreasing double_precision parameter.')
 
-        self.logger.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
-############
-        self.logger.info(f'bulks {len(self.bulk_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
-        run = 0
-        stuck = 0
+#### Main loop.
+#### Linking bulk's opt connection -> branches are joined -> checking for next bulk's optimum -> if opt target is another bulk -> bulks are merged
+        self.log.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
+        run, stuck = 0, 0
         while self.result_edges < self.num_points - 1 and self.bulk_queue:
             self._should_stop_mst()
 
             if run == 0:
                 if stuck:
                     break
-                run = len(self.bulk_queue)
+                self.num_bulks = run = len(self.bulk_queue)
                 stuck = 1
-                self.logger.info(f'bulks {run:.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
 
             run -= 1
 
@@ -659,7 +638,5 @@ cdef class UniversalReciprocity (object):
                     C = self.B.union(self.out_i, self.out_j, A, B)
                     self._absorb_heap(A, B, C)
                     self.bulk_queue.append(C)
-
-        self.logger.info(f'bulks {len(self.bulk_queue):.0f} edges {self.result_edges:.0f} evals {self.count_evaluations:.0f}/{self.count_inner_evaluations:.0f}')
 
         return edge_cases
