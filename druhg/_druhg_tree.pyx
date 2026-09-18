@@ -87,7 +87,9 @@ cdef class UniversalReciprocity (object):
 
         UnionFind U
         UnionFind B
-        set ball
+        np.ndarray ball_stamp_arr
+        np.uint32_t[::1] ball_stamp
+        np.uint32_t ball_gen
 
         np.intp_t count_evaluations
         np.intp_t count_inner_evaluations
@@ -137,7 +139,6 @@ cdef class UniversalReciprocity (object):
 
         self.PRECISION = kwargs.get('double_precision', 0.0000001)  # relevant if distances are tiny
         self.n_jobs = n_jobs
-        self.ball = set()
 
         if algorithm == 0 or algorithm == 1:
             self.dist_tree = tree
@@ -153,6 +154,12 @@ cdef class UniversalReciprocity (object):
             self.num_points = self.tree.shape[0]
         else:
             raise ValueError('algorithm value '+str(algorithm)+' is not valid')
+
+        # Generation-stamped membership: stamp[j] == ball_gen means j is in the ball.
+        # Avoids Python set hash traffic on every reciprocity evaluation.
+        self.ball_stamp_arr = np.zeros(self.num_points, dtype=np.uint32)
+        self.ball_stamp = self.ball_stamp_arr
+        self.ball_gen = 0
 
         self.max_neighbors_search = max_neighbors_search
 
@@ -327,8 +334,12 @@ cdef class UniversalReciprocity (object):
         indices = knn_indices[i]
         distances = knn_dist[i]
 
-        self.ball.clear()
-        self.ball.add(i)
+        self.ball_gen += 1
+        if self.ball_gen == 0:
+            # uint32 wrap: generation 0 collides with the zeroed array, so reset.
+            self.ball_stamp_arr.fill(0)
+            self.ball_gen = 1
+        self.ball_stamp[i] = self.ball_gen
         best = INF
         for r in range(0, self.max_neighbors_search):
 
@@ -337,7 +348,7 @@ cdef class UniversalReciprocity (object):
                 break
 
             j = indices[r]
-            self.ball.add(j)
+            self.ball_stamp[j] = self.ball_gen
             if self.U.is_same_parent(parent, j):
                 continue
             assert(dis > self.PRECISION)
@@ -350,7 +361,7 @@ cdef class UniversalReciprocity (object):
 
             rank = r + 1
             while rank < self.max_neighbors_search and distances[rank] <= dis + self.PRECISION:
-                self.ball.add(indices[rank])
+                self.ball_stamp[indices[rank]] = self.ball_gen
                 rank += 1
 
             # if odistances[rank-1] > dis + self.PRECISION: # outlier part has more information
@@ -360,7 +371,7 @@ cdef class UniversalReciprocity (object):
             orank = 0
             inter = 0
             while orank < self.max_neighbors_search and odistances[orank] <= dis + self.PRECISION:
-                inter += oindices[orank] != i and oindices[orank] in self.ball
+                inter += oindices[orank] != i and self.ball_stamp[oindices[orank]] == self.ball_gen
                 orank += 1
 
             # assert(rank <= orank)
