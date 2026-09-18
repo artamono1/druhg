@@ -29,6 +29,8 @@ _druhg_unionfind = Extension('druhg._druhg_unionfind',
                          sources=['druhg/_druhg_unionfind.pyx'])
 _druhg_pairwise = Extension('druhg._druhg_pairwise',
                          sources=['druhg/_druhg_pairwise.pyx'])
+_druhg_tree_heap = Extension('druhg._druhg_tree_heap',
+                         sources=['druhg/_druhg_tree_heap.pyx'])
 _druhg_tree = Extension('druhg._druhg_tree',
                          sources=['druhg/_druhg_tree.pyx'])
 _druhg_group = Extension('druhg._druhg_group',
@@ -81,6 +83,7 @@ configuration = {
     'ext_modules': [
                     _druhg_unionfind,
                     _druhg_pairwise,
+                    _druhg_tree_heap,
                     _druhg_tree,
                     _druhg_group,
                     _druhg_label,

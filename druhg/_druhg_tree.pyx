@@ -26,8 +26,9 @@ cdef extern from "Python.h":
 from ._druhg_unionfind import UnionFind
 from ._druhg_unionfind cimport UnionFind
 from ._druhg_pairwise import PairwiseDistanceTreeSparse, PairwiseDistanceTreeGeneric
+from ._druhg_tree_heap import FloatIntMinHeap
+from ._druhg_tree_heap cimport FloatIntMinHeap
 
-import _heapq as heapq
 from collections import deque
 
 import bisect
@@ -412,22 +413,20 @@ cdef class UniversalReciprocity (object):
         self.opt_rank[i] = <np.intp_t> rel.max_rank
 
     cdef void _absorb_heap(self, np.intp_t A, np.intp_t B, np.intp_t C) except *:
-        cdef list small, large, ha, hb
-        cdef object item
+        cdef FloatIntMinHeap small, large, ha, hb
 
         ha = self.bulk_heap[A]
         hb = self.bulk_heap[B]
         assert(ha is not None)
         assert(hb is not None)
-        if len(ha) < len(hb):
+        if ha.size < hb.size:
             small = ha
             large = hb
         else:
             small = hb
             large = ha
 
-        for item in small: # todo: change to merge heaps
-            heapq.heappush(large, item)
+        large.extend_from(small)
         self.bulk_heap[C] = large
         assert (A != C)
         assert (B != C)
@@ -435,67 +434,62 @@ cdef class UniversalReciprocity (object):
         self.bulk_heap[B] = None
 
     cdef void _absorb_heap_init(self, np.intp_t A, np.intp_t B, np.intp_t C) except *:
-        cdef list small, large, ha, hb
-        cdef object item
+        cdef FloatIntMinHeap small, large, ha, hb
 
         ha = self.bulk_heap[A]
         hb = self.bulk_heap[B]
         if ha is None and hb is None:
-            self.bulk_heap[C] = []
+            self.bulk_heap[C] = FloatIntMinHeap()
         elif ha is None:
             self.bulk_heap[C] = hb
         elif hb is None:
             self.bulk_heap[C] = ha
         else:
-            if len(ha) < len(hb):
+            if ha.size < hb.size:
                 small = ha
                 large = hb
             else:
                 small = hb
                 large = ha
-            for item in small: # todo: change to merge heaps
-                heapq.heappush(large, item)
+            large.extend_from(small)
             self.bulk_heap[C] = large
         self.bulk_heap[A] = None
         self.bulk_heap[B] = None
 
     cdef bint _refresh(self, np.intp_t A, knn_indices, knn_dist) except *:
-        cdef list heap
+        cdef FloatIntMinHeap heap
         cdef np.intp_t i, j, p, op
         cdef np.double_t v
-        cdef object top
         cdef Relation rel
 
         heap = self.bulk_heap[A]
         assert(heap is not None)
-        while heap:
-            top = heap[0]
-            v, i = top[0], top[1]
+        while heap.size:
+            v = heap.keys[0]
+            i = heap.vals[0]
             assert(i>=0)
             j = self.opt_endpoints[i]
             if j < 0:
-                heapq.heappop(heap)
+                heap.pop()
                 continue
             p = self.U.mark_up(i)
             op = self.U.mark_up(j)
             if p == op:
-                heapq.heappop(heap)
+                heap.pop()
                 rel = Relation(0, 0, 0, 0, 0, 0)
                 self._clear_optimum(i)
                 if self._evaluate_reciprocity(i, p, knn_indices, knn_dist, &rel):
                     self._set_optimum(i, &rel)
-                    heapq.heappush(heap, (rel.reciprocity, i))
+                    heap.push(rel.reciprocity, i)
                 continue
 
             if self.opt_values[i] != v:
-                heapq.heappop(heap)
-                heapq.heappush(heap, (self.opt_values[i], i))
+                heap.pop()
+                heap.push(self.opt_values[i], i)
                 continue
             self.out_i = i
             self.out_j = j
             return 1
-        if heap is None:
-            self.bulk_heap[A] = None
         return 0
 
     cdef void _compute_tree_edges(self) except *:
@@ -520,6 +514,7 @@ cdef class UniversalReciprocity (object):
             np.intp_t i, j, p, op, pp, A, B, C, D, G, N, \
                 warn, infinitesimal, edge_cases
             np.double_t v
+            FloatIntMinHeap heap
 
             Relation rel = Relation(0,0,0,0, 0,0)
 
@@ -601,7 +596,11 @@ cdef class UniversalReciprocity (object):
                     pp = self.B.union(i, j, p, op)
                     self._absorb_heap_init(p, op, pp)
                     self.bulk_queue.append(pp)
-                heapq.heappush(self.bulk_heap[pp], (rel.reciprocity, i))
+                heap = self.bulk_heap[pp]
+                if heap is None:
+                    heap = FloatIntMinHeap()
+                    self.bulk_heap[pp] = heap
+                heap.push(rel.reciprocity, i)
 
 
         if self.result_edges >= self.num_points - 1:
@@ -635,11 +634,11 @@ cdef class UniversalReciprocity (object):
 
             A = self.bulk_queue.popleft()
             heap = self.bulk_heap[A]
-            if heap is None:
+            if heap is None or heap.size == 0:
                 continue
 
-            top = heap[0]
-            v, i = top[0], top[1]
+            v = heap.keys[0]
+            i = heap.vals[0]
             j = self.opt_endpoints[i]
 
             self.result_write(v, i, j, self.opt_rank[i])
