@@ -566,7 +566,9 @@ cdef class UniversalReciprocity (object):
                 if p != op:
                     pp = self.B.union(i, j, p, op)
                     self._absorb_heap_init(p, op, pp)
-                    self.bulk_queue.append(pp)
+                    heap = self.bulk_heap[pp]
+                    if heap is not None and heap.size > 0:
+                        self.bulk_queue.append(pp)
 
                 if rel.reciprocity == 0.: # values match
                     warn += 1
@@ -590,6 +592,7 @@ cdef class UniversalReciprocity (object):
                     heap = FloatIntMinHeap()
                     self.bulk_heap[pp] = heap
                 heap.push(rel.reciprocity, i)
+
 
         if self.result_edges >= self.num_points - 1:
             self.log.info('Two subjects only')
