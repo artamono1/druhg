@@ -107,7 +107,8 @@ def test_query_n_jobs_matches_sequential():
 def test_druhg_core_n_jobs_sequential():
     from druhg import DRUHG
     rng = np.random.RandomState(6)
-    X = np.ascontiguousarray(rng.randn(50, 2))
+    # n >= _PARALLEL_QUERY_MIN so core_n_jobs>1 exercises the parallel path
+    X = np.ascontiguousarray(rng.randn(160, 2))
     a = DRUHG(max_ranking=10, core_n_jobs=1, verbose=False).fit(X)
     b = DRUHG(max_ranking=10, core_n_jobs=2, verbose=False).fit(X)
     assert a.num_edges_ == b.num_edges_
