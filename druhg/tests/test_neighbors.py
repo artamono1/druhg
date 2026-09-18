@@ -90,6 +90,30 @@ def test_druhg_kd_and_ball_trees():
     np.testing.assert_array_equal(kd.labels_, ball.labels_)
 
 
+def test_query_n_jobs_matches_sequential():
+    rng = np.random.RandomState(5)
+    X = np.ascontiguousarray(rng.randn(160, 3))
+    k = 5
+    tree = KDTree(X, leaf_size=8, metric='euclidean')
+    d1, i1 = tree.query(X, k=k, n_jobs=1)
+    d2, i2 = tree.query(X, k=k, n_jobs=2)
+    d3, i3 = tree.query(X, k=k, n_jobs=None)
+    np.testing.assert_allclose(d1, d2, rtol=1e-9, atol=1e-12)
+    np.testing.assert_allclose(d1, d3, rtol=1e-9, atol=1e-12)
+    np.testing.assert_array_equal(i1, i2)
+    np.testing.assert_array_equal(i1, i3)
+
+
+def test_druhg_core_n_jobs_sequential():
+    from druhg import DRUHG
+    rng = np.random.RandomState(6)
+    X = np.ascontiguousarray(rng.randn(50, 2))
+    a = DRUHG(max_ranking=10, core_n_jobs=1, verbose=False).fit(X)
+    b = DRUHG(max_ranking=10, core_n_jobs=2, verbose=False).fit(X)
+    assert a.num_edges_ == b.num_edges_
+    np.testing.assert_array_equal(a.labels_, b.labels_)
+
+
 def test_sklearn_agreement_if_present():
     pytest.importorskip('sklearn')
     from sklearn.neighbors import KDTree as SKKD, BallTree as SKBall

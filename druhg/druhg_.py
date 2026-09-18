@@ -344,9 +344,9 @@ def druhg(X, max_ranking=16,
             * ``slow`` (todo)
 
     core_n_jobs : int, optional (default=None)
-        Number of parallel jobs to run in neighbors distance computations (if
-        supported by the specific algorithm).
-        For default, (n_cpus + 1 + core_dist_n_jobs) is used.
+        Number of parallel jobs for NeighborTree kNN queries (Numba).
+        ``None`` uses all available CPUs; ``1`` forces sequential queries;
+        negative values follow the joblib convention (``-1`` = all CPUs).
 
     **kwargs : optional
         Arguments passed to the distance metric

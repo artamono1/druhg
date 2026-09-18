@@ -68,6 +68,11 @@ cdef class UniversalReciprocity (object):
     leaf_size : int, optional (default=20)
         Leaf size of the injected KDTree/BallTree. Kept for API compatibility.
 
+    n_jobs : int, optional (default=4)
+        Parallel jobs for NeighborTree kNN queries. ``1`` forces sequential
+        Numba kernels; larger values cap Numba's thread count. Ignored for
+        precomputed pairwise distance trees.
+
     **kwargs :
         Keyword args passed to the metric.
         Used only with KDTree/BallTree option.
@@ -552,6 +557,7 @@ cdef class UniversalReciprocity (object):
                     k=self.max_neighbors_search,
                     dualtree=True,
                     breadth_first=True,
+                    n_jobs=self.n_jobs,
                     )
         self.log.knn_query_done()
         self._should_stop_mst()
