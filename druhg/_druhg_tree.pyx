@@ -16,7 +16,8 @@ import numpy as np
 cimport numpy as np
 import sys
 import time
-import logging
+import math
+
 
 from ._druhg_tree_logging import TreeLogging
 
@@ -501,10 +502,11 @@ cdef class UniversalReciprocity (object):
         # DRUHG
         # computes DRUHG spanning tree from a FIFO of targeting bulks
         cdef:
-            np.intp_t i, j, p, op, pp, A, B, C, D, G, N, \
+            np.intp_t i, j, p, op, pp, A, B, C, \
                 warn, infinitesimal, edge_cases
             np.double_t v
             FloatIntMinHeap heap
+            FloatIntMinHeap Bheap
 
             Relation rel = Relation(0,0,0,0, 0,0)
 
@@ -605,18 +607,12 @@ cdef class UniversalReciprocity (object):
             self.log.warning('Some distances('+str(infinitesimal)+') are smaller than self.PRECISION ('+str(self.PRECISION)+
                    ') level. Try decreasing double_precision parameter.')
 
+        self.log.info(f'MSTree: {len(self.bulk_queue):.0f} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
+
 #### Main loop.
 #### Linking all bulk's opt connection until it's opt targets to other bulk, then merge
-        self.log.info(f'MSTree: {len(self.bulk_queue):.0f} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
-        run = 0
         while self.result_edges < self.num_points - 1 and self.bulk_queue:
             self._should_stop_mst()
-
-            if run == 0:
-                self.num_bulks = run = len(self.bulk_queue)
-                self.log.info(f'MSTree: {len(self.bulk_queue):.0f} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%.')
-
-            run -= 1
 
             A = self.bulk_queue.popleft()
             heap = self.bulk_heap[A]
@@ -639,8 +635,15 @@ cdef class UniversalReciprocity (object):
 
                 if self._refresh(A, knn_indices, knn_dist):
                     B = self.B.mark_up(self.out_j)
-                    if A != B:
-                        self.bulk_queue.append(A)
+                    if A != B: # no inside connections
+                        Bheap = self.bulk_heap[B]
+                        if Bheap is not None:
+                            i = Bheap.vals[0]
+                            j = self.opt_endpoints[i]
+                            if j >= 0 and A == self.B.mark_up(j): # A->B and B->A, then we join by going to the "front" of queue
+                                self.bulk_queue.appendleft(A)
+                                break
+                        self.bulk_queue.appendleft(A)
                         break
                 else:
                     break
