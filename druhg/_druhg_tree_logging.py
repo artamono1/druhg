@@ -150,11 +150,11 @@ class TreeLogging(object):
     def note_interrupt(self, reason, num_bulks, result_edges, num_points):
         total, pct = _edge_progress(result_edges, num_points)
         self.warning(
-            'MSTree formation: interruption started (%s) after %s bulks, %s edges %.2f%% of %s.',
+            'MSTree: interruption started (%s) after %s bulks, %s edges %.2f%% of %s.',
             reason, num_bulks, result_edges, pct, total)
 
     def _inplace_status(self, num_bulks, result_edges, total, pct, elapsed, hint):
-        return 'MSTree formation: %s bulks, %s/%s edges (%.1f%%) %.1fs  %s' % (
+        return 'MSTree: %s bulks, %s/%s edges (%.1f%%) %.1fs  %s' % (
             num_bulks, result_edges, total, pct, elapsed, hint)
 
     def prompt_progress(self, num_bulks, result_edges, num_points, elapsed):
@@ -166,11 +166,11 @@ class TreeLogging(object):
                 self._inplace_status(num_bulks, result_edges, total, pct, elapsed, hint))
             return
         self.logger.warning(
-            'MSTree formation: %s bulks, %s edges %.2f%% of %s after %.1fs. Still working. %s',
+            'MSTree: %s bulks, %s edges %.2f%% of %s after %.1fs. Still working. %s',
             num_bulks, result_edges, pct, total, elapsed, _WAIT_HINT)
 
     def knn_query_start(self, max_neighbors_search, num_points, show_progress):
-        head = 'kNN querying: %s neighbors for %s points.' % (
+        head = 'kNNeighbors: %s neighbors for %s points.' % (
             max_neighbors_search, num_points)
         if num_points >= 1000:
             self.logger.warning(
@@ -178,12 +178,12 @@ class TreeLogging(object):
                 head)
             if show_progress:
                 self.write_inplace_status(
-                    'kNN querying: blocking, no ticks until neighbors return')
+                    'kNNeighbors: blocking, no ticks until neighbors return')
         else:
             self.logger.info('%s', head)
 
     def knn_query_done(self):
-        self.info('kNN querying: done')
+        self.info('kNNeighbors: done')
 
     def finish_mst(self, interrupted, interrupt_reason, num_bulks, result_edges, num_points,
                    edge_cases, max_neighbors_search, elapsed=0.):
@@ -194,7 +194,7 @@ class TreeLogging(object):
             else:
                 suffix = 'Partial forest. Continuing to labeling.'
             self.warning(
-                'MSTree formation: interruption result: %s bulks, %s edges %.2f%% of %s (%s). %s',
+                'MSTree: interruption result: %s bulks, %s edges %.2f%% of %s (%s). %s',
                 num_bulks, result_edges, pct, total, interrupt_reason, suffix)
         elif self.saw_heartbeat:
             if self.is_tty or self.jupyter_progress is not None:
@@ -205,11 +205,11 @@ class TreeLogging(object):
                 self.end_progress_line()
             else:
                 self.logger.warning(
-                    'MSTree formation: %s bulks, %s edges %.2f%% of %s after %.1fs. Done. Continue labeling.',
+                    'MSTree: %s bulks, %s edges %.2f%% of %s after %.1fs. Done. Continue labeling.',
                     num_bulks, result_edges, pct, total, elapsed)
         else:
             self.info(
-                'MSTree formation: %s bulks, %s edges %.2f%%. Done.',
+                'MSTree: %s bulks, %s edges %.2f%%. Done.',
                 num_bulks, result_edges, 100. * result_edges / num_points)
         if result_edges != num_points - 1:
             self.info(

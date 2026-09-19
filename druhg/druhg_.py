@@ -409,7 +409,7 @@ def druhg(X, max_ranking=16,
                                   **kwargs)
     except KeyboardInterrupt:
         logger.warning(
-            'MSTree formation: interruption started (KeyboardInterrupt) before the spanning tree was built.')
+            'MSTree: interruption started (KeyboardInterrupt) before the spanning tree was built.')
 
     if ur is not None:
         num_edges = ur.get_num_edges()
@@ -418,7 +418,7 @@ def druhg(X, max_ranking=16,
         num_edges = 0
         buffers[Buffer.INTERRUPTED.value] = 'KeyboardInterrupt'
         logger.warning(
-            'MSTree formation: interruption result: 0 of %s edges. '
+            'MSTree: interruption result: 0 of %s edges. '
             'Spanning tree was not built.',
             max(size - 1, 0))
         _drain_keyboard_interrupt()

@@ -546,7 +546,7 @@ cdef class UniversalReciprocity (object):
         self._should_stop_mst()
 
 #### Initialization and pure reciprocity (ranks equal)
-        self.log.info(f'MSTree formation: initializing nearest connections. Pure autoconnect.')
+        self.log.info(f'MSTree: initializing nearest connections. Pure autoconnect.')
         warn, infinitesimal = 0, 0
 
         i = self.num_points
@@ -606,17 +606,15 @@ cdef class UniversalReciprocity (object):
                    ') level. Try decreasing double_precision parameter.')
 
 #### Main loop.
-#### Linking bulk's opt connection -> branches are joined -> checking for next bulk's optimum -> if opt target is another bulk -> bulks are merged
-        self.log.info(f'MSTree formation: {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
-        run, stuck = 0, 0
+#### Linking all bulk's opt connection until it's opt targets to other bulk, then merge
+        self.log.info(f'MSTree: {len(self.bulk_queue):.0f} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
+        run = 0
         while self.result_edges < self.num_points - 1 and self.bulk_queue:
             self._should_stop_mst()
 
             if run == 0:
-                if stuck:
-                    break
                 self.num_bulks = run = len(self.bulk_queue)
-                stuck = 1
+                self.log.info(f'MSTree: {len(self.bulk_queue):.0f} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%.')
 
             run -= 1
 
@@ -625,21 +623,28 @@ cdef class UniversalReciprocity (object):
             if heap is None:
                 continue
 
-            v = heap.keys[0]
-            i = heap.vals[0]
+            v, i = heap.keys[0], heap.vals[0]
             j = self.opt_endpoints[i]
-
-            self.result_write(v, i, j, self.opt_rank[i])
-            self.U.union(i, j, self.U.mark_up(i), self.U.mark_up(j))
-            stuck = 0
-
-            if self._refresh(A, knn_indices, knn_dist):
-                B = self.B.mark_up(self.out_j)
-                if A == B:
-                    self.bulk_queue.append(A)
-                else:
-                    C = self.B.union(self.out_i, self.out_j, A, B)
-                    self._absorb_heap(A, B, C)
+            B = self.B.mark_up(j)
+            if A != B:
+                C = self.B.union(i, j, A, B)
+                self._absorb_heap(A, B, C)
+                if self._refresh(C, knn_indices, knn_dist):
                     self.bulk_queue.append(C)
+                continue
+
+            while True:
+                self.result_write(v, i, j, self.opt_rank[i])
+                self.U.union(i, j, self.U.mark_up(i), self.U.mark_up(j))
+
+                if self._refresh(A, knn_indices, knn_dist):
+                    B = self.B.mark_up(self.out_j)
+                    if A != B:
+                        self.bulk_queue.append(A)
+                        break
+                else:
+                    break
+                v, i = heap.keys[0], heap.vals[0]
+                j = self.opt_endpoints[i]
 
         return edge_cases
