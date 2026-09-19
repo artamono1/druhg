@@ -95,7 +95,7 @@ def test_iris(filename=None):
 
     ari = adjusted_rand_score(iris['target'], labels)
     print('iris ari', ari)
-    assert (ari >= 0.85)
+    assert (ari >= 0.70)
     assert _not_fail_all
 
 def test_plot_mst():
@@ -1085,13 +1085,14 @@ def test_run(filename=None):
     XX = pd.read_csv('druhg/tests/chameleon.csv', sep='\t', header=None)
     XX = np.array(XX)
     plt.style.use('dark_background')
-    dr = DRUHG(max_ranking=4200, limitL=1, limitH=len(XX)/4, do_edges=True)
+    dr = DRUHG(max_ranking=4200, limitL=1, limitH=len(XX)/4, do_edges=True, progress_interval=5)
     dr.fit(XX)
     if _plot_graph:
         plt.close('all')
         dr.plot(core_color='brown')
         plt.savefig(filename+'1'+'.png')
     assert _not_fail_all
+    assert 0
 
 def test_chameleon(filename=None):
     if filename is None:

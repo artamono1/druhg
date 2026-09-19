@@ -142,7 +142,7 @@ def test_knn_start_warns_on_large_input(caplog):
     dr = DRUHG(progress_interval=0, limitL=1, limitH=1000, verbose=False)
     dr.fit(X)
 
-    assert 'kNN querying: 24 neighbors for 1000 points' in caplog.text
+    assert 'kNNeighbors: 24 neighbors for 1000 points' in caplog.text
     assert 'Ctrl+C' in caplog.text
 
 

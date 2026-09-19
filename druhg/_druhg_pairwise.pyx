@@ -26,9 +26,10 @@ cdef class PairwiseDistanceTreeSparse(object):
         self.data_size = N
         self.data_arr = d
 
-    cpdef tuple query(self, d, k, dualtree = 0, breadth_first = 0):
+    cpdef tuple query(self, d, k, dualtree=0, breadth_first=0, n_jobs=None):
         # TODO: actually we need to consider replacing INF with something else.
         # Reciprocity of absent link is not the same as the INF. Do reciprocity with graphs!
+        # n_jobs is accepted for API parity with NeighborTree.query; unused here.
         cdef np.ndarray[np.double_t, ndim=2] knn_dist
         cdef np.ndarray[np.intp_t, ndim=2] knn_indices
 
@@ -69,7 +70,8 @@ cdef class PairwiseDistanceTreeGeneric(object):
         self.data_size = N
         self.data_arr = d
 
-    cpdef tuple query(self, d, k, dualtree = 0, breadth_first = 0):
+    cpdef tuple query(self, d, k, dualtree=0, breadth_first=0, n_jobs=None):
+        # n_jobs is accepted for API parity with NeighborTree.query; unused here.
         cdef np.ndarray[np.double_t, ndim=2] knn_dist
         cdef np.ndarray[np.intp_t, ndim=2] knn_indices
 
