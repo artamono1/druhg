@@ -5,9 +5,32 @@ License: 3-clause BSD
 import math
 
 import numpy as np
-from numba import njit, prange
+from joblib.parallel import cpu_count
+from numba import config as numba_config
+from numba import get_num_threads, njit, prange, set_num_threads
 
 INF = np.inf
+_PARALLEL_QUERY_MIN = 128
+
+
+def _resolve_query_n_jobs(n_jobs):
+    """Resolve ``n_jobs`` for neighbor queries.
+
+    Returns
+    -------
+    int or None
+        ``None`` keeps Numba's current thread count (auto). A positive int is
+        the requested worker count; ``1`` forces the sequential kernels.
+        Negative values use joblib's ``cpu_count()`` (same as ``core_n_jobs``).
+    """
+    if n_jobs is None:
+        return None
+    n_jobs = int(n_jobs)
+    if n_jobs == 0:
+        raise ValueError('n_jobs == 0 is not supported')
+    if n_jobs < 0:
+        n_jobs = max(cpu_count() + 1 + n_jobs, 1)
+    return n_jobs
 
 TREE_KD = 0
 TREE_BALL = 1
@@ -1041,12 +1064,22 @@ class NeighborTree:
         return (_rebuild_tree, (cls, np.asarray(self.data), kwargs))
 
     def query(self, X, k=1, return_distance=True, dualtree=False, breadth_first=False,
-              sort_results=True):
+              sort_results=True, n_jobs=None):
         """Return k nearest neighbors for each row in X, excluding the point itself.
 
         Training sample ``i`` is omitted from the neighbors of query row ``i``.
         ``dualtree`` and ``breadth_first`` are accepted for API compatibility;
         queries use a single-tree depth-first search.
+
+        Parameters
+        ----------
+        n_jobs : int, optional (default=None)
+            Parallelism for the Numba kNN kernels. ``None`` leaves Numba's
+            current thread count unchanged (unlike ``core_n_jobs=None`` in
+            ``druhg``, which resolves to all CPUs before calling ``query``).
+            ``1`` forces sequential execution; ``>1`` caps Numba threads;
+            negative values follow the joblib convention
+            (``-1`` = all CPUs, ``-2`` = all but one, ...).
         """
         X = _as_sample_matrix(X, n_features=self.n_features)
         if X.shape[1] != self.n_features:
@@ -1064,23 +1097,42 @@ class NeighborTree:
         dist_arr = np.full((n_queries, k), INF, dtype=np.float64)
         ind_arr = np.zeros((n_queries, k), dtype=np.intp)
         do_sort = 1 if sort_results else 0
-        parallel = n_queries >= 128
+        effective_jobs = _resolve_query_n_jobs(n_jobs)
+        parallel = n_queries >= _PARALLEL_QUERY_MIN and effective_jobs != 1
+        restore_threads = None
+        if parallel and effective_jobs is not None:
+            threads = min(effective_jobs, numba_config.NUMBA_NUM_THREADS)
+            if threads <= 1:
+                parallel = False
+            else:
+                prev_threads = get_num_threads()
+                if threads != prev_threads:
+                    set_num_threads(threads)
+                    restore_threads = prev_threads
         args = (
             X, self._tree_data, self._idx_array, self._idx_start, self._idx_end,
             self._is_leaf, self._bounds, self._leaf_of, dist_arr, ind_arr, do_sort,
         )
-        if self.tree_kind == TREE_KD and self.metric_id == MET_EUCLIDEAN and not self.has_weight:
-            (_query_all_kd_l2 if parallel else _query_all_kd_l2_seq)(*args)
-        elif self.tree_kind == TREE_KD and self.metric_id == MET_MANHATTAN and not self.has_weight:
-            (_query_all_kd_l1 if parallel else _query_all_kd_l1_seq)(*args)
-        else:
-            generic = (
-                X, self._tree_data, self._idx_array, self._idx_start, self._idx_end,
-                self._is_leaf, self._radius, self._bounds, self.tree_kind, self.metric_id,
-                self.p, self._weight, self._V, self._VI, self.has_weight, self.has_V,
-                self.has_VI, self._leaf_of, dist_arr, ind_arr, do_sort,
-            )
-            (_query_all if parallel else _query_all_seq)(*generic)
+
+        def _dispatch(use_parallel):
+            if self.tree_kind == TREE_KD and self.metric_id == MET_EUCLIDEAN and not self.has_weight:
+                (_query_all_kd_l2 if use_parallel else _query_all_kd_l2_seq)(*args)
+            elif self.tree_kind == TREE_KD and self.metric_id == MET_MANHATTAN and not self.has_weight:
+                (_query_all_kd_l1 if use_parallel else _query_all_kd_l1_seq)(*args)
+            else:
+                generic = (
+                    X, self._tree_data, self._idx_array, self._idx_start, self._idx_end,
+                    self._is_leaf, self._radius, self._bounds, self.tree_kind, self.metric_id,
+                    self.p, self._weight, self._V, self._VI, self.has_weight, self.has_V,
+                    self.has_VI, self._leaf_of, dist_arr, ind_arr, do_sort,
+                )
+                (_query_all if use_parallel else _query_all_seq)(*generic)
+
+        try:
+            _dispatch(parallel)
+        finally:
+            if restore_threads is not None:
+                set_num_threads(restore_threads)
 
         if self.angular_mode == MET_COSINE:
             dist_arr = 0.5 * dist_arr * dist_arr

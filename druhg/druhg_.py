@@ -344,9 +344,9 @@ def druhg(X, max_ranking=16,
             * ``slow`` (todo)
 
     core_n_jobs : int, optional (default=None)
-        Number of parallel jobs to run in neighbors distance computations (if
-        supported by the specific algorithm).
-        For default, (n_cpus + 1 + core_dist_n_jobs) is used.
+        Number of parallel jobs for NeighborTree kNN queries (Numba).
+        ``None`` uses all available CPUs; ``1`` forces sequential queries;
+        negative values follow the joblib convention (``-1`` = all CPUs).
 
     **kwargs : optional
         Arguments passed to the distance metric
@@ -409,7 +409,7 @@ def druhg(X, max_ranking=16,
                                   **kwargs)
     except KeyboardInterrupt:
         logger.warning(
-            'MSTree formation: interruption started (KeyboardInterrupt) before the spanning tree was built.')
+            'MSTree: interruption started (KeyboardInterrupt) before the spanning tree was built.')
 
     if ur is not None:
         num_edges = ur.get_num_edges()
@@ -418,7 +418,7 @@ def druhg(X, max_ranking=16,
         num_edges = 0
         buffers[Buffer.INTERRUPTED.value] = 'KeyboardInterrupt'
         logger.warning(
-            'MSTree formation: interruption result: 0 of %s edges. '
+            'MSTree: interruption result: 0 of %s edges. '
             'Spanning tree was not built.',
             max(size - 1, 0))
         _drain_keyboard_interrupt()
@@ -895,7 +895,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         """Assign cluster labels from the current MST (full or partial).
 
         Call after ``fit_tree()``. Uses the estimator's ``exclude``,
-        ``limitL`` / ``limitH``, and ``fix_outliers`` when those
+        ``size_range``, and ``fix_outliers`` when those
         arguments are omitted.
 
         Returns

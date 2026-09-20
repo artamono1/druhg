@@ -1,3 +1,4 @@
+import sys
 import warnings
 
 try:
@@ -25,20 +26,42 @@ class CustomBuildExtCommand(build_ext):
         # Call original build_ext command
         build_ext.run(self)
 
-_druhg_unionfind = Extension('druhg._druhg_unionfind',
-                         sources=['druhg/_druhg_unionfind.pyx'])
-_druhg_pairwise = Extension('druhg._druhg_pairwise',
-                         sources=['druhg/_druhg_pairwise.pyx'])
-_druhg_tree = Extension('druhg._druhg_tree',
-                         sources=['druhg/_druhg_tree.pyx'])
-_druhg_group = Extension('druhg._druhg_group',
-                         sources=['druhg/_druhg_group.pyx'])
-_druhg_label = Extension('druhg._druhg_label',
-                         sources=['druhg/_druhg_label.pyx'])
-_druhg_group_placement = Extension('druhg._druhg_group_placement',
-                         sources=['druhg/_druhg_group_placement.pyx'])
-_druhg_displacement = Extension('druhg._druhg_displacement',
-                         sources=['druhg/_druhg_displacement.pyx'])
+
+# Release optimization for Cython extensions. OpenMP is deferred until hot
+# loops are nogil/C-only (avoids fighting Numba threads on the kNN path).
+if sys.platform == 'win32':
+    _EXTRA_COMPILE_ARGS = ['/O2']
+else:
+    _EXTRA_COMPILE_ARGS = ['-O3']
+
+_DEFINE_MACROS = [('CYTHON_WITHOUT_ASSERTIONS', None)]
+
+
+def _cython_extension(name, sources):
+    return Extension(
+        name,
+        sources=sources,
+        extra_compile_args=list(_EXTRA_COMPILE_ARGS),
+        define_macros=list(_DEFINE_MACROS),
+    )
+
+
+_druhg_unionfind = _cython_extension(
+    'druhg._druhg_unionfind', ['druhg/_druhg_unionfind.pyx'])
+_druhg_pairwise = _cython_extension(
+    'druhg._druhg_pairwise', ['druhg/_druhg_pairwise.pyx'])
+_druhg_tree_heap = _cython_extension(
+    'druhg._druhg_tree_heap', ['druhg/_druhg_tree_heap.pyx'])
+_druhg_tree = _cython_extension(
+    'druhg._druhg_tree', ['druhg/_druhg_tree.pyx'])
+_druhg_group = _cython_extension(
+    'druhg._druhg_group', ['druhg/_druhg_group.pyx'])
+_druhg_label = _cython_extension(
+    'druhg._druhg_label', ['druhg/_druhg_label.pyx'])
+_druhg_group_placement = _cython_extension(
+    'druhg._druhg_group_placement', ['druhg/_druhg_group_placement.pyx'])
+_druhg_displacement = _cython_extension(
+    'druhg._druhg_displacement', ['druhg/_druhg_displacement.pyx'])
 
 def readme():
     with open('README.rst', encoding='utf8') as readme_file:
@@ -51,7 +74,7 @@ def requirements():
 
 configuration = {
     'name': 'druhg',
-    'version': '1.8.4',
+    'version': '1.8.5',
     'description': 'Universal clustering based on dialectical materialism',
     'long_description': readme(),
     'long_description_content_type': 'text/x-rst',
@@ -81,6 +104,7 @@ configuration = {
     'ext_modules': [
                     _druhg_unionfind,
                     _druhg_pairwise,
+                    _druhg_tree_heap,
                     _druhg_tree,
                     _druhg_group,
                     _druhg_label,
