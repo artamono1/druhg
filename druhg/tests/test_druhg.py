@@ -768,6 +768,7 @@ def test_hdbscan_clusterable_data(filename=None):
 
     assert (n_clusters==6)
     assert _not_fail_all
+    assert(0)
 
 def test_blobs_three(filename=None):
     if filename is None:
@@ -1085,14 +1086,15 @@ def test_run(filename=None):
     XX = pd.read_csv('druhg/tests/chameleon.csv', sep='\t', header=None)
     XX = np.array(XX)
     plt.style.use('dark_background')
-    dr = DRUHG(max_ranking=4200, limitL=1, limitH=len(XX)/4, do_edges=True, progress_interval=5)
+    dr = DRUHG(max_ranking=4200, limitL=1, limitH=len(XX)/4,
+               do_edges=True, progress_interval=0.01)
     dr.fit(XX)
     if _plot_graph:
         plt.close('all')
         dr.plot(core_color='brown')
         plt.savefig(filename+'1'+'.png')
     assert _not_fail_all
-    assert 0
+    assert (0)
 
 def test_chameleon(filename=None):
     if filename is None:

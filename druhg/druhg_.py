@@ -398,6 +398,10 @@ def druhg(X, max_ranking=16,
     ur = None
     try:
         tree, algo_code = _tune_treealgo(X, metric, algorithm, leaf_size, p=p, **kwargs)
+        tree_kwargs = dict(kwargs)
+        tree_kwargs['bulk_queue_push'] = kwargs.pop('bulk_queue_push', (0, 1, 1))
+        tree_kwargs['heap_scores'] = kwargs.pop('heap_scores', None)
+        tree_kwargs['mst_perf'] = kwargs.pop('mst_perf', None)
         ur = UniversalReciprocity(algo_code, tree,
                                   buffers[Buffer.UNIONFIND.value], buffers[Buffer.UNIONFIND_FAST.value],
                                   buffers[Buffer.VALUES.value],
@@ -406,7 +410,7 @@ def druhg(X, max_ranking=16,
                                   buffer_ranks=buffers[Buffer.RANKS.value],
                                   buffer_edgepairs=buffers[Buffer.MST.value],
                                   progress_interval=progress_interval,
-                                  **kwargs)
+                                  **tree_kwargs)
     except KeyboardInterrupt:
         logger.warning(
             'MSTree: interruption started (KeyboardInterrupt) before the spanning tree was built.')

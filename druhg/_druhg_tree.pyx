@@ -97,6 +97,7 @@ cdef class UniversalReciprocity (object):
 
         list bulk_heap
         object bulk_queue
+        object bulk_queue2
         np.intp_t num_bulks
 
         np.ndarray ball_stamp_arr
@@ -445,7 +446,7 @@ cdef class UniversalReciprocity (object):
             large.extend_from(small)
             self.bulk_heap[C] = large
 
-    cdef bint _refresh(self, np.intp_t A, knn_indices, knn_dist) except *:
+    cdef bint _refresh_heap(self, np.intp_t A, knn_indices, knn_dist) except *:
         cdef FloatIntMinHeap heap
         cdef np.intp_t i, j, p, op
         cdef np.double_t v
@@ -529,6 +530,7 @@ cdef class UniversalReciprocity (object):
         )
         self.B.nullify()
         self.bulk_queue = deque()
+        self.bulk_queue2 = deque()
         self.out_i = -1
         self.out_j = -1
         self.out_v = INF
@@ -609,12 +611,23 @@ cdef class UniversalReciprocity (object):
 
         self.log.info(f'MSTree: {len(self.bulk_queue):.0f} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
 
+        que = self.bulk_queue
+        mutual_que = self.bulk_queue
+        regular_que = self.bulk_queue2
+
 #### Main loop.
 #### Linking all bulk's opt connection until it's opt targets to other bulk, then merge
-        while self.result_edges < self.num_points - 1 and self.bulk_queue:
+        while self.result_edges < self.num_points - 1 :
             self._should_stop_mst()
 
-            A = self.bulk_queue.popleft()
+            if mutual_que:
+                que = mutual_que
+            elif regular_que:
+                que = regular_que
+            else:
+                break
+
+            A = que.popleft()
             heap = self.bulk_heap[A]
             if heap is None:
                 continue
@@ -625,15 +638,15 @@ cdef class UniversalReciprocity (object):
             if A != B:
                 C = self.B.union(i, j, A, B)
                 self._absorb_heap(A, B, C)
-                if self._refresh(C, knn_indices, knn_dist):
-                    self.bulk_queue.append(C)
+                if self._refresh_heap(C, knn_indices, knn_dist):
+                    que.append(C)
                 continue
 
             while True:
                 self.result_write(v, i, j, self.opt_rank[i])
                 self.U.union(i, j, self.U.mark_up(i), self.U.mark_up(j))
 
-                if self._refresh(A, knn_indices, knn_dist):
+                if self._refresh_heap(A, knn_indices, knn_dist):
                     B = self.B.mark_up(self.out_j)
                     if A != B: # no inside connections
                         Bheap = self.bulk_heap[B]
@@ -641,9 +654,9 @@ cdef class UniversalReciprocity (object):
                             i = Bheap.vals[0]
                             j = self.opt_endpoints[i]
                             if j >= 0 and A == self.B.mark_up(j): # A->B and B->A, then we join by going to the "front" of queue
-                                self.bulk_queue.appendleft(A)
+                                mutual_que.append(A)
                                 break
-                        self.bulk_queue.appendleft(A)
+                        regular_que.append(A)
                         break
                 else:
                     break
