@@ -899,7 +899,7 @@ class DRUHG(BaseEstimator, ClusterMixin):
         """Assign cluster labels from the current MST (full or partial).
 
         Call after ``fit_tree()``. Uses the estimator's ``exclude``,
-        ``limitL`` / ``limitH``, and ``fix_outliers`` when those
+        ``size_range``, and ``fix_outliers`` when those
         arguments are omitted.
 
         Returns
