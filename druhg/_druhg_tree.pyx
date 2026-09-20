@@ -27,8 +27,8 @@ cdef extern from "Python.h":
 from ._druhg_unionfind import UnionFind
 from ._druhg_unionfind cimport UnionFind
 from ._druhg_pairwise import PairwiseDistanceTreeSparse, PairwiseDistanceTreeGeneric
-from ._druhg_tree_heap import FloatIntMinHeap
-from ._druhg_tree_heap cimport FloatIntMinHeap
+from ._druhg_tree_heap import FloatIntMinHeap, IntIntMinHeap
+from ._druhg_tree_heap cimport FloatIntMinHeap, IntIntMinHeap
 
 from collections import deque
 
@@ -97,7 +97,7 @@ cdef class UniversalReciprocity (object):
 
         list bulks # id gives storage
 
-        FloatIntMinHeap heap_of_sizes
+        IntIntMinHeap heap_of_sizes
         object bulk_queue
 
         np.ndarray ball_stamp_arr
@@ -515,7 +515,7 @@ cdef class UniversalReciprocity (object):
             np.double_t v
             FloatIntMinHeap heap
             FloatIntMinHeap Bheap
-            FloatIntMinHeap heap_of_sizes
+            IntIntMinHeap heap_of_sizes
 
             Relation rel = Relation(0,0,0,0, 0,0)
 
@@ -537,7 +537,7 @@ cdef class UniversalReciprocity (object):
             np.zeros(N, dtype=np.intp),
         )
         self.B.nullify()
-        heap_of_sizes = FloatIntMinHeap(N)
+        heap_of_sizes = IntIntMinHeap(N)
         self.heap_of_sizes = heap_of_sizes
         self.bulk_queue = deque()
         self.out_i = -1
@@ -618,11 +618,11 @@ cdef class UniversalReciprocity (object):
         # Prefer smallest targeting bulks; one-way targets wait on bulk_queue.
         for A in range(self.B.next_label):
             heap = self.bulks[A]
-            if heap is not None and heap.size > 0:
-                heap_of_sizes.append_unsorted(<np.double_t> heap.size, A)
+            if heap is not None:
+                heap_of_sizes.append_unsorted(heap.size, A)
         heap_of_sizes.heapify()
 
-        self.log.info(f'MSTree: {heap_of_sizes.size:.0f} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
+        self.log.info(f'MSTree: {heap_of_sizes.size} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
 
 #### Main loop.
 #### Linking all bulk's opt connection until it's opt targets to other bulk, then merge
@@ -649,7 +649,7 @@ cdef class UniversalReciprocity (object):
                 self._absorb_heap(A, B, C)
                 if self._refresh_heap(C, knn_indices, knn_dist):
                     heap = self.bulks[C]
-                    heap_of_sizes.push(<np.double_t> heap.size, C)
+                    heap_of_sizes.push(heap.size, C)
                 continue
 
             while True:
@@ -664,7 +664,7 @@ cdef class UniversalReciprocity (object):
                             i = Bheap.vals[0]
                             j = self.opt_endpoints[i]
                             if j >= 0 and A == self.B.mark_up(j): # A->B and B->A: size-heap, not backup queue
-                                heap_of_sizes.push(<np.double_t> heap.size, A)
+                                heap_of_sizes.push(heap.size, A)
                                 break
                         self.bulk_queue.append(A)
                         break
