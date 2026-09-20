@@ -447,16 +447,22 @@ cdef class UniversalReciprocity (object):
             large.extend_from(small)
             self.bulks[C] = large
 
-    cdef bint _refresh_heap(self, np.intp_t A, knn_indices, knn_dist) except *:
+    cdef bint _refresh_heap(self, np.intp_t A,
+                            np.ndarray[np.intp_t, ndim=2] knn_indices,
+                            np.ndarray[np.double_t, ndim=2] knn_dist) except *:
         cdef FloatIntMinHeap heap
-        cdef np.intp_t i, j, p, op
+        cdef np.intp_t i, j, p, op, n_ops
         cdef np.double_t v
         cdef Relation rel
 
         heap = self.bulks[A]
         assert(heap is not None)
+        n_ops = 0
         while heap.size:
-            self._should_stop_mst()
+            n_ops += 1
+            if n_ops == 64:
+                n_ops = 0
+                self._should_stop_mst()
 
             v = heap.keys[0]
             i = heap.vals[0]
@@ -468,17 +474,17 @@ cdef class UniversalReciprocity (object):
             p = self.U.mark_up(i)
             op = self.U.mark_up(j)
             if p == op:
-                heap.pop()
                 rel = Relation(0, 0, 0, 0, 0, 0)
                 self._clear_optimum(i)
                 if self._evaluate_reciprocity(i, p, knn_indices, knn_dist, &rel):
                     self._set_optimum(i, &rel)
-                    heap.push(rel.reciprocity, i)
+                    heap.replace_root(rel.reciprocity, i)
+                else:
+                    heap.pop()
                 continue
 
             if self.opt_values[i] != v:
-                heap.pop()
-                heap.push(self.opt_values[i], i)
+                heap.replace_root(self.opt_values[i], i)
                 continue
             self.out_i = i
             self.out_j = j
@@ -531,7 +537,7 @@ cdef class UniversalReciprocity (object):
             np.zeros(N, dtype=np.intp),
         )
         self.B.nullify()
-        heap_of_sizes = FloatIntMinHeap()
+        heap_of_sizes = FloatIntMinHeap(N)
         self.heap_of_sizes = heap_of_sizes
         self.bulk_queue = deque()
         self.out_i = -1
@@ -610,10 +616,11 @@ cdef class UniversalReciprocity (object):
                    ') level. Try decreasing double_precision parameter.')
 
         # Prefer smallest targeting bulks; one-way targets wait on bulk_queue.
-        for A in range(2 * N):
+        for A in range(self.B.next_label):
             heap = self.bulks[A]
             if heap is not None and heap.size > 0:
-                heap_of_sizes.push(<np.double_t> heap.size, A)
+                heap_of_sizes.append_unsorted(<np.double_t> heap.size, A)
+        heap_of_sizes.heapify()
 
         self.log.info(f'MSTree: {heap_of_sizes.size:.0f} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
 
@@ -631,7 +638,7 @@ cdef class UniversalReciprocity (object):
                 break
 
             heap = self.bulks[A]
-            if heap is None:
+            if heap is None or heap.size == 0:
                 continue
 
             v, i = heap.keys[0], heap.vals[0]
