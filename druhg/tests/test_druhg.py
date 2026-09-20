@@ -768,7 +768,6 @@ def test_hdbscan_clusterable_data(filename=None):
 
     assert (n_clusters==6)
     assert _not_fail_all
-    assert(0)
 
 def test_blobs_three(filename=None):
     if filename is None:

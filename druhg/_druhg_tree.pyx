@@ -7,7 +7,7 @@
 
 # Builds spanning tree for druhg algorithm
 # uses dialectics to evaluate reciprocity
-# links per-branch heap tops via FIFO of targeting bulks (not a global min-heap)
+# links per-branch heap tops via a size min-heap, with a FIFO backup for one-way targets
 # Author: Pavel Artamonov
 # License: 3-clause BSD
 
@@ -95,10 +95,10 @@ cdef class UniversalReciprocity (object):
         UnionFind U
         UnionFind B
 
-        list bulk_heap
+        list bulks # id gives storage
+
+        FloatIntMinHeap heap_of_sizes
         object bulk_queue
-        object bulk_queue2
-        np.intp_t num_bulks
 
         np.ndarray ball_stamp_arr
         np.uint32_t[::1] ball_stamp
@@ -180,7 +180,8 @@ cdef class UniversalReciprocity (object):
         self.U.nullify()
 
         self.result_edges = 0
-        self.num_bulks = -1
+        self.heap_of_sizes = None
+        self.bulk_queue = None
 
         self.result_values_arr = buffer_values
         if len(self.result_values_arr) < self.num_points - 1:
@@ -216,11 +217,11 @@ cdef class UniversalReciprocity (object):
             return
         self.interrupted = 1
         self.interrupt_reason = reason
-        self.log.note_interrupt(reason, self.num_bulks, self.result_edges, self.num_points)
+        self.log.note_interrupt(reason, self.heap_of_sizes.size + 1, self.result_edges, self.num_points)
 
     cdef void _prompt_progress(self) except *:
         self.log.prompt_progress(
-            self.num_bulks, self.result_edges, self.num_points, time.monotonic() - self.t0)
+            self.heap_of_sizes.size + 1, self.result_edges, self.num_points, time.monotonic() - self.t0)
         self.t_last_progress = time.monotonic()
 
     cdef void _should_stop_mst(self) except *:
@@ -241,7 +242,7 @@ cdef class UniversalReciprocity (object):
     cdef void _finish_mst(self, np.intp_t edge_cases) except *:
         self.log.finish_mst(
             self.interrupted, self.interrupt_reason,
-            self.num_bulks,
+            self.heap_of_sizes.size,
             self.result_edges, self.num_points,
             edge_cases, self.max_neighbors_search,
             time.monotonic() - self.t0)
@@ -405,10 +406,10 @@ cdef class UniversalReciprocity (object):
     cdef void _absorb_heap(self, np.intp_t A, np.intp_t B, np.intp_t C) except *:
         cdef FloatIntMinHeap small, large, ha, hb
 
-        ha = self.bulk_heap[A]
-        hb = self.bulk_heap[B]
-        self.bulk_heap[A] = None
-        self.bulk_heap[B] = None
+        ha = self.bulks[A]
+        hb = self.bulks[B]
+        self.bulks[A] = None
+        self.bulks[B] = None
 
         assert(ha is not None)
         assert(hb is not None)
@@ -420,22 +421,22 @@ cdef class UniversalReciprocity (object):
             large = ha
 
         large.extend_from(small)
-        self.bulk_heap[C] = large
+        self.bulks[C] = large
 
     cdef void _absorb_heap_init(self, np.intp_t A, np.intp_t B, np.intp_t C) except *:
         cdef FloatIntMinHeap small, large, ha, hb
 
-        ha = self.bulk_heap[A]
-        hb = self.bulk_heap[B]
-        self.bulk_heap[A] = None
-        self.bulk_heap[B] = None
+        ha = self.bulks[A]
+        hb = self.bulks[B]
+        self.bulks[A] = None
+        self.bulks[B] = None
 
         if ha is None and hb is None:
-            self.bulk_heap[C] = FloatIntMinHeap()
+            self.bulks[C] = FloatIntMinHeap()
         elif ha is None:
-            self.bulk_heap[C] = hb
+            self.bulks[C] = hb
         elif hb is None:
-            self.bulk_heap[C] = ha
+            self.bulks[C] = ha
         else:
             if ha.size < hb.size:
                 small = ha
@@ -444,7 +445,7 @@ cdef class UniversalReciprocity (object):
                 small = hb
                 large = ha
             large.extend_from(small)
-            self.bulk_heap[C] = large
+            self.bulks[C] = large
 
     cdef bint _refresh_heap(self, np.intp_t A, knn_indices, knn_dist) except *:
         cdef FloatIntMinHeap heap
@@ -452,7 +453,7 @@ cdef class UniversalReciprocity (object):
         cdef np.double_t v
         cdef Relation rel
 
-        heap = self.bulk_heap[A]
+        heap = self.bulks[A]
         assert(heap is not None)
         while heap.size:
             self._should_stop_mst()
@@ -508,6 +509,7 @@ cdef class UniversalReciprocity (object):
             np.double_t v
             FloatIntMinHeap heap
             FloatIntMinHeap Bheap
+            FloatIntMinHeap heap_of_sizes
 
             Relation rel = Relation(0,0,0,0, 0,0)
 
@@ -522,15 +524,16 @@ cdef class UniversalReciprocity (object):
         self.opt_endpoints = self.opt_endpoints_arr
         self.opt_rank = self.opt_rank_arr
 
-        self.bulk_heap = [None for _ in range(2 * N)]
+        self.bulks = [None for _ in range(2 * N)]
         self.B = UnionFind(
             self.num_points,
             np.zeros(2 * N, dtype=np.intp),
             np.zeros(N, dtype=np.intp),
         )
         self.B.nullify()
+        heap_of_sizes = FloatIntMinHeap()
+        self.heap_of_sizes = heap_of_sizes
         self.bulk_queue = deque()
-        self.bulk_queue2 = deque()
         self.out_i = -1
         self.out_j = -1
         self.out_v = INF
@@ -570,9 +573,7 @@ cdef class UniversalReciprocity (object):
                 if p != op:
                     pp = self.B.union(i, j, p, op)
                     self._absorb_heap_init(p, op, pp)
-                    heap = self.bulk_heap[pp]
-                    if heap is not None and heap.size > 0:
-                        self.bulk_queue.append(pp)
+                    heap = self.bulks[pp]
 
                 if rel.reciprocity == 0.: # values match
                     warn += 1
@@ -590,11 +591,10 @@ cdef class UniversalReciprocity (object):
                 if p != op:
                     pp = self.B.union(i, j, p, op)
                     self._absorb_heap_init(p, op, pp)
-                    self.bulk_queue.append(pp)
-                heap = self.bulk_heap[pp]
+                heap = self.bulks[pp]
                 if heap is None:
                     heap = FloatIntMinHeap()
-                    self.bulk_heap[pp] = heap
+                    self.bulks[pp] = heap
                 heap.push(rel.reciprocity, i)
 
 
@@ -609,26 +609,28 @@ cdef class UniversalReciprocity (object):
             self.log.warning('Some distances('+str(infinitesimal)+') are smaller than self.PRECISION ('+str(self.PRECISION)+
                    ') level. Try decreasing double_precision parameter.')
 
-        self.log.info(f'MSTree: {len(self.bulk_queue):.0f} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
+        # Prefer smallest targeting bulks; one-way targets wait on bulk_queue.
+        for A in range(2 * N):
+            heap = self.bulks[A]
+            if heap is not None and heap.size > 0:
+                heap_of_sizes.push(<np.double_t> heap.size, A)
 
-        que = self.bulk_queue
-        mutual_que = self.bulk_queue
-        regular_que = self.bulk_queue2
+        self.log.info(f'MSTree: {heap_of_sizes.size:.0f} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
 
 #### Main loop.
 #### Linking all bulk's opt connection until it's opt targets to other bulk, then merge
         while self.result_edges < self.num_points - 1 :
             self._should_stop_mst()
 
-            if mutual_que:
-                que = mutual_que
-            elif regular_que:
-                que = regular_que
+            if heap_of_sizes.size != 0:
+                A = heap_of_sizes.vals[0]
+                heap_of_sizes.pop()
+            elif self.bulk_queue:
+                A = self.bulk_queue.popleft()
             else:
                 break
 
-            A = que.popleft()
-            heap = self.bulk_heap[A]
+            heap = self.bulks[A]
             if heap is None:
                 continue
 
@@ -639,7 +641,8 @@ cdef class UniversalReciprocity (object):
                 C = self.B.union(i, j, A, B)
                 self._absorb_heap(A, B, C)
                 if self._refresh_heap(C, knn_indices, knn_dist):
-                    que.append(C)
+                    heap = self.bulks[C]
+                    heap_of_sizes.push(<np.double_t> heap.size, C)
                 continue
 
             while True:
@@ -649,14 +652,14 @@ cdef class UniversalReciprocity (object):
                 if self._refresh_heap(A, knn_indices, knn_dist):
                     B = self.B.mark_up(self.out_j)
                     if A != B: # no inside connections
-                        Bheap = self.bulk_heap[B]
+                        Bheap = self.bulks[B]
                         if Bheap is not None:
                             i = Bheap.vals[0]
                             j = self.opt_endpoints[i]
-                            if j >= 0 and A == self.B.mark_up(j): # A->B and B->A, then we join by going to the "front" of queue
-                                mutual_que.append(A)
+                            if j >= 0 and A == self.B.mark_up(j): # A->B and B->A: size-heap, not backup queue
+                                heap_of_sizes.push(<np.double_t> heap.size, A)
                                 break
-                        regular_que.append(A)
+                        self.bulk_queue.append(A)
                         break
                 else:
                     break
