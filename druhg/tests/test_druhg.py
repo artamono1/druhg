@@ -1093,7 +1093,6 @@ def test_run(filename=None):
         dr.plot(core_color='brown')
         plt.savefig(filename+'1'+'.png')
     assert _not_fail_all
-    assert (0)
 
 def test_chameleon(filename=None):
     if filename is None:

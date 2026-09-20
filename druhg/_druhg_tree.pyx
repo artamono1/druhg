@@ -5,7 +5,7 @@
 # cython: initializedcheck=False
 # cython: cdivision=True
 
-# Builds spanning tree for druhg algorithm
+# Builds minimum spanning tree for druhg algorithm
 # uses dialectics to evaluate reciprocity
 # links per-branch heap tops via a size min-heap, with a FIFO backup for one-way targets
 # Author: Pavel Artamonov
@@ -16,7 +16,6 @@ import numpy as np
 cimport numpy as np
 import sys
 import time
-import math
 
 
 from ._druhg_tree_logging import TreeLogging
@@ -457,11 +456,11 @@ cdef class UniversalReciprocity (object):
 
         heap = self.bulks[A]
         assert(heap is not None)
-        n_ops = 0
+        n_ops = 64
         while heap.size:
-            n_ops += 1
-            if n_ops == 64:
-                n_ops = 0
+            n_ops -= 1
+            if n_ops == 0:
+                n_ops = 64
                 self._should_stop_mst()
 
             v = heap.keys[0]
@@ -537,8 +536,7 @@ cdef class UniversalReciprocity (object):
             np.zeros(N, dtype=np.intp),
         )
         self.B.nullify()
-        heap_of_sizes = IntIntMinHeap(N)
-        self.heap_of_sizes = heap_of_sizes
+        self.heap_of_sizes = IntIntMinHeap(N)
         self.bulk_queue = deque()
         self.out_i = -1
         self.out_j = -1
@@ -619,19 +617,18 @@ cdef class UniversalReciprocity (object):
         for A in range(self.B.next_label):
             heap = self.bulks[A]
             if heap is not None:
-                heap_of_sizes.append_unsorted(heap.size, A)
-        heap_of_sizes.heapify()
-
-        self.log.info(f'MSTree: {heap_of_sizes.size} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
+                self.heap_of_sizes.append_unsorted(heap.size, A)
+        self.heap_of_sizes.heapify()
+        self.log.info(f'MSTree: {self.heap_of_sizes.size} bulks, {self.result_edges:.0f} pure edges {100.*self.result_edges/self.num_points:.2f}%. Continue with branch connections.')
 
 #### Main loop.
 #### Linking all bulk's opt connection until it's opt targets to other bulk, then merge
         while self.result_edges < self.num_points - 1 :
             self._should_stop_mst()
 
-            if heap_of_sizes.size != 0:
-                A = heap_of_sizes.vals[0]
-                heap_of_sizes.pop()
+            if self.heap_of_sizes.size != 0:
+                A = self.heap_of_sizes.vals[0]
+                self.heap_of_sizes.pop()
             elif self.bulk_queue:
                 A = self.bulk_queue.popleft()
             else:
@@ -649,7 +646,7 @@ cdef class UniversalReciprocity (object):
                 self._absorb_heap(A, B, C)
                 if self._refresh_heap(C, knn_indices, knn_dist):
                     heap = self.bulks[C]
-                    heap_of_sizes.push(heap.size, C)
+                    self.heap_of_sizes.push(heap.size, C)
                 continue
 
             while True:
@@ -664,7 +661,7 @@ cdef class UniversalReciprocity (object):
                             i = Bheap.vals[0]
                             j = self.opt_endpoints[i]
                             if j >= 0 and A == self.B.mark_up(j): # A->B and B->A: size-heap, not backup queue
-                                heap_of_sizes.push(heap.size, A)
+                                self.heap_of_sizes.push(heap.size + Bheap.size, A)
                                 break
                         self.bulk_queue.append(A)
                         break

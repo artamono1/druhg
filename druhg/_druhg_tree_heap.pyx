@@ -157,7 +157,7 @@ cdef class FloatIntMinHeap:
         cdef np.intp_t i
 
         i = self.size >> 1
-        while i > 0:
+        while i != 0:
             i -= 1
             self._siftup(i)
 
@@ -296,6 +296,6 @@ cdef class IntIntMinHeap:
         cdef np.intp_t i
 
         i = self.size >> 1
-        while i > 0:
+        while i != 0:
             i -= 1
             self._siftup(i)
