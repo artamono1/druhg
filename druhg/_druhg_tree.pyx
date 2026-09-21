@@ -412,6 +412,7 @@ cdef class UniversalReciprocity (object):
 
         assert(ha is not None)
         assert(hb is not None)
+        assert(hb.size!=0)
         if ha.size < hb.size:
             small = ha
             large = hb
@@ -533,7 +534,6 @@ cdef class UniversalReciprocity (object):
         self.B = UnionFind(
             self.num_points,
             np.zeros(2 * N, dtype=np.intp),
-            np.zeros(N, dtype=np.intp),
         )
         self.B.nullify()
         self.heap_of_sizes = IntIntMinHeap(N)
@@ -573,9 +573,9 @@ cdef class UniversalReciprocity (object):
                 p, op = self.U.mark_up(i), self.U.mark_up(j)
                 pp = self.U.union(i, rel.endpoint, p, op)
 
-                p, op = self.B.mark_up(i), self.B.mark_up(j)
+                p, op = self.B.bulk_up(i), self.B.bulk_up(j)
                 if p != op:
-                    pp = self.B.union(i, j, p, op)
+                    pp = self.B.union_bulks(i, j, p, op)
                     self._absorb_heap_init(p, op, pp)
                     heap = self.bulks[pp]
 
@@ -590,10 +590,10 @@ cdef class UniversalReciprocity (object):
             if self._evaluate_reciprocity(i, self.U.mark_up(i), knn_indices, knn_dist, &rel):
                 self._set_optimum(i, &rel)
                 j = rel.endpoint
-                p, op = self.B.mark_up(i), self.B.mark_up(j)
+                p, op = self.B.bulk_up(i), self.B.bulk_up(j)
                 pp = p
                 if p != op:
-                    pp = self.B.union(i, j, p, op)
+                    pp = self.B.union_bulks(i, j, p, op)
                     self._absorb_heap_init(p, op, pp)
                 heap = self.bulks[pp]
                 if heap is None:
@@ -640,9 +640,9 @@ cdef class UniversalReciprocity (object):
 
             v, i = heap.keys[0], heap.vals[0]
             j = self.opt_endpoints[i]
-            B = self.B.mark_up(j)
+            B = self.B.bulk_up(j)
             if A != B:
-                C = self.B.union(i, j, A, B)
+                C = self.B.union_bulks(i, j, A, B)
                 self._absorb_heap(A, B, C)
                 if self._refresh_heap(C, knn_indices, knn_dist):
                     heap = self.bulks[C]
@@ -654,13 +654,13 @@ cdef class UniversalReciprocity (object):
                 self.U.union(i, j, self.U.mark_up(i), self.U.mark_up(j))
 
                 if self._refresh_heap(A, knn_indices, knn_dist):
-                    B = self.B.mark_up(self.out_j)
+                    B = self.B.bulk_up(self.out_j)
                     if A != B: # no inside connections
                         Bheap = self.bulks[B]
                         if Bheap is not None:
                             i = Bheap.vals[0]
                             j = self.opt_endpoints[i]
-                            if j >= 0 and A == self.B.mark_up(j): # A->B and B->A: size-heap, not backup queue
+                            if j >= 0 and A == self.B.bulk_up(j): # A->B and B->A: size-heap, not backup queue
                                 self.heap_of_sizes.push(heap.size + Bheap.size, A)
                                 break
                         self.bulk_queue.append(A)
