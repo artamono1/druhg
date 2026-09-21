@@ -14,6 +14,8 @@ import logging
 import numpy as np
 cimport numpy as np
 
+from libc.string cimport memset
+
 def allocate_unionfind_pair(np.intp_t N):
     buffer_parents = np.zeros(2 * N, dtype=np.intp) # is used to store all the connections and to pass between phases
     buffer_fast = np.zeros(N, dtype=np.intp) # is used only in the first phase for the fast access
@@ -29,7 +31,7 @@ cdef class UnionFind:
         self.parent = NULL
 
         self.fast_arr = buffer_fast
-        # self.fast = NULL
+        self.fast = NULL
 
         if buffer_parents is None:
             logging.getLogger(__package__).error('buffer was not provided')
@@ -46,20 +48,24 @@ cdef class UnionFind:
             logging.getLogger(__package__).error('fast_arr is too small %s %s', len(self.fast_arr), N)
             return
         else:
-            # self.fast = (<np.intp_t *> self.fast_arr.data)
-            self.fast : np.intp_t[:] = self.fast_arr
+            self.fast = (<np.intp_t *> self.fast_arr.data)
+            # self.fast : np.intp_t[:] = self.fast_arr
 
     cdef np.intp_t get_offset(self):
         return self.p_size + 1
 
-    cdef np.intp_t nullify(self):
-        cdef np.intp_t i
+    cdef void nullify(self):
+        cdef np.intp_t i, n
+        cdef np.intp_t *f
 
-        self.parent_arr[:2 * self.p_size] = 0
-        i = self.p_size
-        while i!=0:
-            i -= 1
-            self.fast[i] = i
+        n = self.p_size
+        self.next_label = n + 1
+
+        f = self.fast
+        if f != NULL:
+            memset(self.parent, 0, <size_t> (2*n) * sizeof(np.intp_t))
+            for i in range(n):
+                f[i] = i
 
     cdef np.intp_t mark_up(self, np.intp_t n):
         cdef np.intp_t p
@@ -71,6 +77,21 @@ cdef class UnionFind:
 
         self.fast[n] = p
         return p
+
+    cdef np.intp_t bulk_up(self, np.intp_t n):
+        cdef np.intp_t p, ret
+
+        ret = n
+        p = self.parent[n]
+        if p != 0:
+            ret = p
+            p = self.parent[p]
+            while p != 0:
+                ret = p
+                p = self.parent[p]
+            self.parent[n] = ret
+
+        return ret
 
     cdef np.intp_t is_same_parent(self, np.intp_t p, np.intp_t on):
         cdef np.intp_t op
@@ -85,6 +106,15 @@ cdef class UnionFind:
 
         pp = self.next_label
         self.fast[n] = self.fast[on] = pp
+        self.parent[p] = self.parent[op] = pp
+
+        self.next_label += 1
+        return pp
+
+    cdef np.intp_t union_bulks(self, np.intp_t n, np.intp_t on, np.intp_t p, np.intp_t op):
+        cdef np.intp_t pp
+
+        pp = self.next_label
         self.parent[p] = self.parent[op] = pp
 
         self.next_label += 1

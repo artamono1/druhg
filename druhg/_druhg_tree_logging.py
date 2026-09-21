@@ -172,15 +172,15 @@ class TreeLogging(object):
     def knn_query_start(self, max_neighbors_search, num_points, show_progress):
         head = 'kNNeighbors: %s neighbors for %s points.' % (
             max_neighbors_search, num_points)
-        if num_points >= 1000:
-            self.logger.warning(
-                '%s Ctrl+C after this step stops MST and continues labeling.',
-                head)
-            if show_progress:
-                self.write_inplace_status(
-                    'kNNeighbors: blocking, no ticks until neighbors return')
-        else:
-            self.logger.info('%s', head)
+        # if num_points >= 1000:
+        #     self.logger.warning(
+        #         '%s Ctrl+C after this step stops MST and continues labeling.',
+        #         head)
+        #     if show_progress:
+        #         self.write_inplace_status(
+        #             'kNNeighbors: blocking, no ticks until neighbors return')
+        # else:
+        self.logger.info('%s', head)
 
     def knn_query_done(self):
         self.info('kNNeighbors: done')
