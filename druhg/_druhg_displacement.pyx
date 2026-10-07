@@ -290,13 +290,20 @@ cdef np.double_t relation_across(np.intp_t own, np.intp_t other, np.double_t edg
                                  np.intp_t N, np.intp_t offset):
     # The connection edge enters the relation here.
     # Clustering adds it to the numerator. The denominator gets it always.
-    cdef np.double_t top, bottom
+    cdef:
+        np.double_t top, bottom, rel
+        bint clustered
 
+    clustered = side_is_cluster(own, clusters, N, offset)
     top = side_edge_value(own, clustered_edges, N, offset)
-    if side_is_cluster(own, clusters, N, offset):
+    if clustered:
         top += edge
     bottom = side_edge_value(other, sum_edges, N, offset) + edge
-    return relation_a_to_b(top, bottom)
+    rel = relation_a_to_b(top, bottom)
+    logging.getLogger(__package__).debug(
+        'relation %s -> %s edge %.4f clustered %s top %.4f bottom %.4f = %.4f',
+        own, other, edge, clustered, top, bottom, rel)
+    return rel
 
 
 cdef void accumulate_edge_sums(UnionFind U,
@@ -344,6 +351,10 @@ cdef void accumulate_edge_sums(UnionFind U,
             clustered_edges[level] = total
         else:
             clustered_edges[level] = clustered
+        logging.getLogger(__package__).debug(
+            'level %s v %.4f children %s %s sum_edges %.4f clustered_edges %.4f cluster %s',
+            level, values[level], child_a[level], child_b[level],
+            sum_edges[level], clustered_edges[level], clusters[level] < 0)
 
 
 cdef void accumulate_side_coords(UnionFind U, np.ndarray coords_arr,
@@ -427,6 +438,10 @@ cdef object point_level_delta(np.intp_t i, np.intp_t own, np.intp_t other,
     n_all = n_own + n_other
     c_all = (c_own * n_own + c_other * n_other) / n_all
     to_rest = n_all * (c_all - coords_arr[i])
+    logging.getLogger(__package__).debug(
+        'point %s own %s other %s edge %.4f n %.0f+%.0f rel %.4f / %.4f scale %.4f center %s rest %s delta %s',
+        i, own, other, edge, n_own, n_other, rel_to_other, rel_to_own, scale,
+        center_delta, to_rest, center_delta + to_rest)
     return center_delta + to_rest
 
 
