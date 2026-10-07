@@ -8,6 +8,9 @@
 # Motion phase.
 # Each union-find level merges two sides. Relation from A to B is the sum of
 # clustered edge values in A divided by the sum of edge values in B.
+# The connection edge enters that relation: clustering adds it to the
+# numerator, and the denominator receives it always. A single point
+# clusterizes, so its numerator is that same edge.
 # Every point adds its own delta at that level:
 #   (center of the other side - center of its side)
 #     * (sum of relations toward its side) / (sum of relations toward the other side)
@@ -272,6 +275,30 @@ cdef np.double_t relation_a_to_b(np.double_t clustered_edges_a, np.double_t sum_
     return clustered_edges_a / sum_edges_b
 
 
+cdef bint side_is_cluster(np.intp_t label, np.intp_t[::1] clusters,
+                          np.intp_t N, np.intp_t offset):
+    # A point is connected by this edge, so it clusterizes onto it.
+    if label < N:
+        return True
+    return clusters[label - offset] < 0
+
+
+cdef np.double_t relation_across(np.intp_t own, np.intp_t other, np.double_t edge,
+                                 np.intp_t[::1] clusters,
+                                 np.double_t[::1] sum_edges,
+                                 np.double_t[::1] clustered_edges,
+                                 np.intp_t N, np.intp_t offset):
+    # The connection edge enters the relation here.
+    # Clustering adds it to the numerator. The denominator gets it always.
+    cdef np.double_t top, bottom
+
+    top = side_edge_value(own, clustered_edges, N, offset)
+    if side_is_cluster(own, clusters, N, offset):
+        top += edge
+    bottom = side_edge_value(other, sum_edges, N, offset) + edge
+    return relation_a_to_b(top, bottom)
+
+
 cdef void accumulate_edge_sums(UnionFind U,
                                np.ndarray values_arr,
                                np.ndarray clusters_arr,
@@ -370,8 +397,10 @@ cdef object _side_center(np.intp_t label, np.ndarray coords_arr,
 
 
 cdef object point_level_delta(np.intp_t i, np.intp_t own, np.intp_t other,
+                              np.double_t edge,
                               np.ndarray coords_arr,
                               np.ndarray sum_coords_arr, np.intp_t[::1] sizes,
+                              np.intp_t[::1] clusters,
                               np.double_t[::1] sum_edges,
                               np.double_t[::1] clustered_edges,
                               np.intp_t N, np.intp_t offset):
@@ -384,12 +413,10 @@ cdef object point_level_delta(np.intp_t i, np.intp_t own, np.intp_t other,
     c_own, n_own = _side_center(own, coords_arr, sum_coords_arr, sizes, N, offset)
     c_other, n_other = _side_center(other, coords_arr, sum_coords_arr, sizes, N, offset)
 
-    rel_to_other = relation_a_to_b(
-        side_edge_value(own, clustered_edges, N, offset),
-        side_edge_value(other, sum_edges, N, offset))
-    rel_to_own = relation_a_to_b(
-        side_edge_value(other, clustered_edges, N, offset),
-        side_edge_value(own, sum_edges, N, offset))
+    rel_to_other = relation_across(
+        own, other, edge, clusters, sum_edges, clustered_edges, N, offset)
+    rel_to_own = relation_across(
+        other, own, edge, clusters, sum_edges, clustered_edges, N, offset)
     # Each point of a side has one relation onto the opposite side.
     sum_to_own = n_other * rel_to_own
     sum_to_other = n_own * rel_to_other
@@ -446,18 +473,21 @@ cdef void apply_level_relations(UnionFind U,
                                 np.ndarray coords_arr, np.ndarray ret_arr,
                                 np.ndarray child_a_arr, np.ndarray child_b_arr,
                                 np.ndarray sum_coords_arr, np.ndarray size_arr,
+                                np.ndarray values_arr, np.ndarray clusters_arr,
                                 np.ndarray sum_edges_arr,
                                 np.ndarray clustered_edges_arr):
     cdef:
         np.intp_t i, came, p, level, sib, N, offset
-        np.intp_t[::1] child_a, child_b, sizes
-        np.double_t[::1] sum_edges, clustered_edges
+        np.intp_t[::1] child_a, child_b, sizes, clusters
+        np.double_t[::1] values, sum_edges, clustered_edges
 
     N = U.p_size
     offset = U.get_offset()
     child_a = child_a_arr
     child_b = child_b_arr
     sizes = size_arr
+    values = values_arr
+    clusters = clusters_arr
     sum_edges = sum_edges_arr
     clustered_edges = clustered_edges_arr
 
@@ -469,8 +499,8 @@ cdef void apply_level_relations(UnionFind U,
             sib = sibling_label(came, level, child_a, child_b)
             if sib >= 0:
                 ret_arr[i] += point_level_delta(
-                    i, came, sib, coords_arr, sum_coords_arr, sizes,
-                    sum_edges, clustered_edges, N, offset)
+                    i, came, sib, values[level], coords_arr, sum_coords_arr, sizes,
+                    clusters, sum_edges, clustered_edges, N, offset)
             came = p
             p = U.parent[p]
 
@@ -529,16 +559,17 @@ cpdef list relation_magnitudes_by_level(np.ndarray uf_arr, np.ndarray values_arr
     """Relation of each point at each union-find level.
 
     Level ``k`` is an ``(n, 3)`` array of ``(point, other_point, magnitude)``.
-    ``magnitude`` is the relation from the point's side A to the opposite side B:
-    sum of clustered edge values in A, divided by the sum of edge values in B.
+    ``magnitude`` is the relation from the point's side A to the opposite side B.
+    The connection edge is added to A's clustered edges when A clusterizes,
+    and it is always added to B's edges.
     """
     cdef:
         UnionFind U
         np.intp_t level, N, offset, other, sib, i, came, p
         np.ndarray child_a_arr, child_b_arr, rep_arr
         np.ndarray sum_edges_arr, clustered_edges_arr
-        np.intp_t[::1] child_a, child_b, rep
-        np.double_t[::1] sum_edges, clustered_edges
+        np.intp_t[::1] child_a, child_b, rep, clusters
+        np.double_t[::1] values, sum_edges, clustered_edges
         np.double_t rel
         list buckets
 
@@ -559,6 +590,8 @@ cpdef list relation_magnitudes_by_level(np.ndarray uf_arr, np.ndarray values_arr
     child_a = child_a_arr
     child_b = child_b_arr
     rep = rep_arr
+    values = values_arr
+    clusters = clusters_arr
     sum_edges = sum_edges_arr
     clustered_edges = clustered_edges_arr
 
@@ -571,9 +604,9 @@ cpdef list relation_magnitudes_by_level(np.ndarray uf_arr, np.ndarray values_arr
             sib = sibling_label(came, level, child_a, child_b)
             other = subtree_rep(sib, rep, N, offset)
             if other >= 0:
-                rel = relation_a_to_b(
-                    side_edge_value(came, clustered_edges, N, offset),
-                    side_edge_value(sib, sum_edges, N, offset))
+                rel = relation_across(
+                    came, sib, values[level], clusters,
+                    sum_edges, clustered_edges, N, offset)
                 buckets[level].append((i, other, rel))
             came = p
             p = U.parent[p]
@@ -601,8 +634,8 @@ cpdef list point_deltas_by_level(np.ndarray uf_arr, np.ndarray values_arr,
         np.ndarray child_a_arr, child_b_arr, rep_arr
         np.ndarray sum_edges_arr, clustered_edges_arr
         np.ndarray sum_coords_arr, size_arr, coords
-        np.intp_t[::1] child_a, child_b, sizes
-        np.double_t[::1] sum_edges, clustered_edges
+        np.intp_t[::1] child_a, child_b, sizes, clusters
+        np.double_t[::1] values, sum_edges, clustered_edges
         list buckets
 
     N = size
@@ -627,6 +660,8 @@ cpdef list point_deltas_by_level(np.ndarray uf_arr, np.ndarray values_arr,
     child_a = child_a_arr
     child_b = child_b_arr
     sizes = size_arr
+    values = values_arr
+    clusters = clusters_arr
     sum_edges = sum_edges_arr
     clustered_edges = clustered_edges_arr
 
@@ -639,8 +674,8 @@ cpdef list point_deltas_by_level(np.ndarray uf_arr, np.ndarray values_arr,
             sib = sibling_label(came, level, child_a, child_b)
             if sib >= 0:
                 delta = point_level_delta(
-                    i, came, sib, coords, sum_coords_arr, sizes,
-                    sum_edges, clustered_edges, N, offset)
+                    i, came, sib, values[level], coords, sum_coords_arr, sizes,
+                    clusters, sum_edges, clustered_edges, N, offset)
                 buckets[level].append((i,) + tuple(np.asarray(delta, dtype=np.double).ravel()))
             came = p
             p = U.parent[p]
@@ -685,6 +720,7 @@ cdef move_points(UnionFind U, np.ndarray values_arr,
     apply_level_relations(U, coords, ret,
                           child_a_arr, child_b_arr,
                           sum_coords_arr, size_arr,
+                          values_arr, clusters_arr,
                           sum_edges_arr, clustered_edges_arr)
     return ret_arr
 
