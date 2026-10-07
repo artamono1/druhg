@@ -5,10 +5,15 @@
 # cython: initializedcheck=False
 # cython: cdivision=True
 
-# Produces the next position of the datapoint
-# uses results from the tree edges
-# logarithmic climb from point to hierarchy of parents
-# first run evaluates parent nodes, second run adds the displacement
+# Motion phase.
+# Each union-find level merges two sides. Relation from A to B is the sum of
+# clustered edge values in A divided by the sum of edge values in B.
+# Every point adds its own delta at that level:
+#   (center of the other side - center of its side)
+#     * (sum of relations toward its side) / (sum of relations toward the other side)
+#   + the sum of vectors from the point to every other point of the whole
+#     connection (both sides), excluding that point.
+# Relations toward a side are the relations of the points on the opposite side.
 
 # Author: Pavel Artamonov
 # License: 3-clause BSD
@@ -224,111 +229,463 @@ cdef point_vs_other_side(UnionFind U, np.ndarray values_arr,
     return ret_arr
 
 
-cdef point_vs_all(UnionFind U, np.ndarray values_arr,
-                  np.ndarray group_arr, np.ndarray coords_arr,
-                  np.ndarray sizes_arr, np.ndarray clusters_arr,
-                  np.ndarray ret_arr):
-    # point shifts to a center and whole other side repels
-    # monad's center is a mediator
+cdef np.intp_t subtree_rep(np.intp_t label, np.intp_t[::1] rep, np.intp_t N, np.intp_t offset):
+    # Smallest point index under this union-find label.
+    if label < 0:
+        return -1
+    if label < N:
+        return label
+    return rep[label - offset]
+
+
+cdef np.intp_t sibling_label(np.intp_t came, np.intp_t level,
+                             np.intp_t[::1] child_a, np.intp_t[::1] child_b):
+    if child_a[level] < 0 or child_b[level] < 0:
+        return -1
+    if came == child_a[level]:
+        return child_b[level]
+    if came == child_b[level]:
+        return child_a[level]
+    return -1
+
+
+cdef np.intp_t other_point_at_level(np.intp_t came, np.intp_t level,
+                                    np.intp_t[::1] child_a, np.intp_t[::1] child_b,
+                                    np.intp_t[::1] rep, np.intp_t N, np.intp_t offset):
+    # came is the child label that contains the source point.
+    # The related point is the representative of the other child.
+    return subtree_rep(sibling_label(came, level, child_a, child_b), rep, N, offset)
+
+
+cdef np.double_t side_edge_value(np.intp_t label, np.double_t[::1] arr,
+                                 np.intp_t N, np.intp_t offset):
+    # A point has no internal edges.
+    if label < N:
+        return 0
+    return arr[label - offset]
+
+
+cdef np.double_t relation_a_to_b(np.double_t clustered_edges_a, np.double_t sum_edges_b):
+    # Relation from A to B = sum of clustered edges of A / sum of edges of B.
+    if sum_edges_b <= 0:
+        return 0
+    return clustered_edges_a / sum_edges_b
+
+
+cdef void accumulate_edge_sums(UnionFind U,
+                               np.ndarray values_arr,
+                               np.ndarray clusters_arr,
+                               np.ndarray child_a_arr,
+                               np.ndarray child_b_arr,
+                               np.ndarray sum_edges_arr,
+                               np.ndarray clustered_edges_arr):
+    # sum_edges[level] is the sum of merge values inside that component,
+    # including the merge that formed it.
+    # clustered_edges[level] is that sum when the component clusterized,
+    # otherwise only the clustered edges of its children.
     cdef:
-        np.intp_t p, i, j, x_size, y_size, p_size, e
-        np.intp_t loop_size = U.p_size
-        np.intp_t offset = U.get_offset()
-        np.intp_t x_is_cluster, y_is_cluster
-        GroupPlacement x_node, y_node, p_node, x_outlier, y_outlier
-        np.double_t v
+        np.intp_t level, N, offset, child
+        np.double_t total, clustered
+        np.intp_t[::1] child_a, child_b
+        np.intp_t[::1] clusters
+        np.double_t[::1] values, sum_edges, clustered_edges
 
-    logger = logging.getLogger(__package__)
-    debug = logger.isEnabledFor(logging.DEBUG)
+    N = U.p_size
+    offset = U.get_offset()
+    child_a = child_a_arr
+    child_b = child_b_arr
+    clusters = clusters_arr
+    values = values_arr
+    sum_edges = sum_edges_arr
+    clustered_edges = clustered_edges_arr
 
-    x_outlier = GroupPlacement(_n_coords(coords_arr))
-    y_outlier = GroupPlacement(_n_coords(coords_arr))
-    empty_array = np.zeros(_n_coords(coords_arr), dtype=np.double)
+    for level in range(N - 1):
+        if child_a[level] < 0:
+            continue
+        total = values[level]
+        clustered = 0
+        child = child_a[level]
+        if child >= N:
+            total += sum_edges[child - offset]
+            clustered += clustered_edges[child - offset]
+        child = child_b[level]
+        if child >= N:
+            total += sum_edges[child - offset]
+            clustered += clustered_edges[child - offset]
+        sum_edges[level] = total
+        if clusters[level] < 0:
+            clustered_edges[level] = total
+        else:
+            clustered_edges[level] = clustered
 
-    for e in range(loop_size):
-        e_coords = coords_arr[e]
-        e_node = x_outlier.cook_outlier_coords(e_coords, empty_array)
-        x_node = e_node
-        x_size = 1
-        x_is_cluster = True
-        e_value = 0
 
-        if debug:
-            logger.debug('=== %s point %s', e, e_coords)
-        assert all(ret_arr[e] == e_coords)
-        p = U.parent[e]
-        i = e
+cdef void accumulate_side_coords(UnionFind U, np.ndarray coords_arr,
+                                 np.ndarray child_a_arr, np.ndarray child_b_arr,
+                                 np.ndarray sum_coords_arr, np.ndarray size_arr):
+    # sum_coords[level] / size[level] is the center of that component.
+    # Points are not stored: a point's center is its own coordinate.
+    cdef:
+        np.intp_t level, N, offset, child
+        np.intp_t[::1] child_a, child_b, sizes
+
+    N = U.p_size
+    offset = U.get_offset()
+    child_a = child_a_arr
+    child_b = child_b_arr
+    sizes = size_arr
+
+    for level in range(N - 1):
+        if child_a[level] < 0:
+            continue
+        acc = np.zeros(sum_coords_arr.shape[1], dtype=np.double)
+        count = 0
+        child = child_a[level]
+        if child >= 0:
+            if child < N:
+                acc += coords_arr[child]
+                count += 1
+            else:
+                acc += sum_coords_arr[child - offset]
+                count += sizes[child - offset]
+        child = child_b[level]
+        if child >= 0:
+            if child < N:
+                acc += coords_arr[child]
+                count += 1
+            else:
+                acc += sum_coords_arr[child - offset]
+                count += sizes[child - offset]
+        sum_coords_arr[level] = acc
+        sizes[level] = count
+
+
+cdef object _side_center(np.intp_t label, np.ndarray coords_arr,
+                         np.ndarray sum_coords_arr, np.intp_t[::1] sizes,
+                         np.intp_t N, np.intp_t offset):
+    cdef np.double_t n
+    if label < N:
+        return coords_arr[label], 1.0
+    n = sizes[label - offset]
+    return sum_coords_arr[label - offset] / n, n
+
+
+cdef object point_level_delta(np.intp_t i, np.intp_t own, np.intp_t other,
+                              np.ndarray coords_arr,
+                              np.ndarray sum_coords_arr, np.intp_t[::1] sizes,
+                              np.double_t[::1] sum_edges,
+                              np.double_t[::1] clustered_edges,
+                              np.intp_t N, np.intp_t offset):
+    # Delta of point i, which sits on side `own`, toward side `other`.
+    cdef:
+        np.double_t n_own, n_other, n_all
+        np.double_t rel_to_other, rel_to_own, sum_to_own, sum_to_other, scale
+        object c_own, c_other, c_all
+
+    c_own, n_own = _side_center(own, coords_arr, sum_coords_arr, sizes, N, offset)
+    c_other, n_other = _side_center(other, coords_arr, sum_coords_arr, sizes, N, offset)
+
+    rel_to_other = relation_a_to_b(
+        side_edge_value(own, clustered_edges, N, offset),
+        side_edge_value(other, sum_edges, N, offset))
+    rel_to_own = relation_a_to_b(
+        side_edge_value(other, clustered_edges, N, offset),
+        side_edge_value(own, sum_edges, N, offset))
+    # Each point of a side has one relation onto the opposite side.
+    sum_to_own = n_other * rel_to_own
+    sum_to_other = n_own * rel_to_other
+    scale = sum_to_own / sum_to_other if sum_to_other > 0 else 0
+
+    center_delta = (c_other - c_own) * scale
+    # Vectors from this point to every other point of both sides.
+    n_all = n_own + n_other
+    c_all = (c_own * n_own + c_other * n_other) / n_all
+    to_rest = n_all * (c_all - coords_arr[i])
+    return center_delta + to_rest
+
+
+cdef void organize_level_relations(UnionFind U,
+                                   np.ndarray child_a_arr,
+                                   np.ndarray child_b_arr,
+                                   np.ndarray rep_arr):
+    # child_*[level] is the union-find label of one side of the merge.
+    # rep[level] is the smallest point index in that component.
+    # Caller fills child_* and rep with -1.
+    cdef:
+        np.intp_t u, p, level, N, offset, ra, rb
+        np.intp_t[::1] child_a, child_b, rep
+
+    N = U.p_size
+    offset = U.get_offset()
+    child_a = child_a_arr
+    child_b = child_b_arr
+    rep = rep_arr
+
+    for u in range(2 * N):
+        p = U.parent[u]
+        if p == 0:
+            continue
+        level = p - offset
+        if child_a[level] < 0:
+            child_a[level] = u
+        elif child_b[level] < 0:
+            child_b[level] = u
+
+    # Internal labels are created in order, so a child's level is smaller.
+    for level in range(N - 1):
+        if child_a[level] < 0:
+            continue
+        ra = subtree_rep(child_a[level], rep, N, offset)
+        if child_b[level] < 0:
+            rep[level] = ra
+            continue
+        rb = subtree_rep(child_b[level], rep, N, offset)
+        rep[level] = ra if ra < rb else rb
+
+
+cdef void apply_level_relations(UnionFind U,
+                                np.ndarray coords_arr, np.ndarray ret_arr,
+                                np.ndarray child_a_arr, np.ndarray child_b_arr,
+                                np.ndarray sum_coords_arr, np.ndarray size_arr,
+                                np.ndarray sum_edges_arr,
+                                np.ndarray clustered_edges_arr):
+    cdef:
+        np.intp_t i, came, p, level, sib, N, offset
+        np.intp_t[::1] child_a, child_b, sizes
+        np.double_t[::1] sum_edges, clustered_edges
+
+    N = U.p_size
+    offset = U.get_offset()
+    child_a = child_a_arr
+    child_b = child_b_arr
+    sizes = size_arr
+    sum_edges = sum_edges_arr
+    clustered_edges = clustered_edges_arr
+
+    for i in range(N):
+        came = i
+        p = U.parent[i]
         while p != 0:
-            p -= offset
-            v = values_arr[p]
+            level = p - offset
+            sib = sibling_label(came, level, child_a, child_b)
+            if sib >= 0:
+                ret_arr[i] += point_level_delta(
+                    i, came, sib, coords_arr, sum_coords_arr, sizes,
+                    sum_edges, clustered_edges, N, offset)
+            came = p
+            p = U.parent[p]
 
-            p_node, p_size = group_arr[p], sizes_arr[p]
-            y_size = p_size - x_size
-            center = p_node.sum_coords / p_size
-            center_magnitude = 1. * x_size * y_size / (v * (x_size + y_size)) * p_node.net_densities / p_node.sum_edges
 
-            j = p_node.get_sibling_id(i)
-            y_node = group_arr[j] if y_size > 1 else y_outlier.cook_outlier_coords(
-                coords_arr[j],
-                v * (v + x_is_cluster * x_node.sum_edges) * (center - coords_arr[j]) / np.linalg.norm(center - coords_arr[j]),
-                v * (v + x_is_cluster * x_node.sum_edges) * (x_node.sum_coords / x_size - coords_arr[j]) / np.linalg.norm(x_node.sum_coords / x_size - coords_arr[j]),
-            )
-            y_is_cluster = True if (y_size == 1 or clusters_arr[j] < 0) else False
-            e_value = (v * (v + x_node.sum_edges + y_is_cluster * y_node.sum_edges)) if x_is_cluster else e_value
+cpdef list relations_by_level(np.ndarray uf_arr, np.intp_t size):
+    """Relation vector of each union-find level.
 
-            e_center_shift = center - e_coords
-            e_center_shift /= np.linalg.norm(e_center_shift)
-            e_center_shift *= e_value
+    Level ``k`` is an ``(n, 2)`` int array of ``(point, other_point)``.
+    Every point of that level is a source once. ``other_point`` is the
+    smallest point index on the opposite side of the same level.
+    """
+    cdef:
+        UnionFind U
+        np.intp_t level, N, offset, other, i, came, p
+        np.ndarray child_a_arr, child_b_arr, rep_arr
+        np.intp_t[::1] child_a, child_b, rep
+        list buckets
 
-            e_side_shift = y_node.sum_coords / y_size - e_coords
-            e_side_shift /= np.linalg.norm(e_side_shift)
-            e_side_shift *= e_value
+    N = size
+    if N < 2:
+        return []
 
-            if x_size == 1:  # initialisation
-                x_node = x_outlier.cook_outlier_coords(e_coords, e_center_shift, e_side_shift)
+    U = UnionFind(N, uf_arr)
+    offset = U.get_offset()
+    child_a_arr = np.full(N - 1, -1, dtype=np.intp)
+    child_b_arr = np.full(N - 1, -1, dtype=np.intp)
+    rep_arr = np.full(N - 1, -1, dtype=np.intp)
+    organize_level_relations(U, child_a_arr, child_b_arr, rep_arr)
+    child_a = child_a_arr
+    child_b = child_b_arr
+    rep = rep_arr
 
-            alpha = 1. * y_size  # каждый с каждым
-            alpha *= 1. / (1. * x_size + y_size)
-            orientation = -1. if x_is_cluster else 1.
-            shift = orientation * e_center_shift * center_magnitude * alpha
+    buckets = [[] for _ in range(N - 1)]
+    for i in range(N):
+        came = i
+        p = U.parent[i]
+        while p != 0:
+            level = p - offset
+            other = other_point_at_level(came, level, child_a, child_b, rep, N, offset)
+            if other >= 0:
+                buckets[level].append((i, other))
+            came = p
+            p = U.parent[p]
 
-            all_shift = y_node.center_shift * center_magnitude
-            all_shift *= -1. if y_is_cluster else 1.
-            all_shift += shift
+    out = []
+    for level in range(N - 1):
+        if len(buckets[level]) == 0:
+            out.append(np.empty((0, 2), dtype=np.intp))
+        else:
+            out.append(np.asarray(buckets[level], dtype=np.intp))
+    return out
 
-            if debug:
-                logger.debug('id %s %s p %s v %.2f sizes %s + %s = %s', i, j, p, v, x_size, y_size, p_size)
-                logger.debug('all_shift %s', all_shift)
 
-            ret_arr[e] += all_shift
+cpdef list relation_magnitudes_by_level(np.ndarray uf_arr, np.ndarray values_arr,
+                                        np.ndarray clusters_arr, np.intp_t size):
+    """Relation of each point at each union-find level.
 
-            x_node, x_size = p_node, p_size
-            x_is_cluster = clusters_arr[p] < 0
+    Level ``k`` is an ``(n, 3)`` array of ``(point, other_point, magnitude)``.
+    ``magnitude`` is the relation from the point's side A to the opposite side B:
+    sum of clustered edge values in A, divided by the sum of edge values in B.
+    """
+    cdef:
+        UnionFind U
+        np.intp_t level, N, offset, other, sib, i, came, p
+        np.ndarray child_a_arr, child_b_arr, rep_arr
+        np.ndarray sum_edges_arr, clustered_edges_arr
+        np.intp_t[::1] child_a, child_b, rep
+        np.double_t[::1] sum_edges, clustered_edges
+        np.double_t rel
+        list buckets
 
-            i = p
-            p = U.parent[p + offset]
+    N = size
+    if N < 2:
+        return []
 
-        if debug:
-            logger.debug('net_shift %s', ret_arr[e] - e_coords)
-    return ret_arr
+    U = UnionFind(N, uf_arr)
+    offset = U.get_offset()
+    child_a_arr = np.full(N - 1, -1, dtype=np.intp)
+    child_b_arr = np.full(N - 1, -1, dtype=np.intp)
+    rep_arr = np.full(N - 1, -1, dtype=np.intp)
+    sum_edges_arr = np.zeros(N - 1, dtype=np.double)
+    clustered_edges_arr = np.zeros(N - 1, dtype=np.double)
+    organize_level_relations(U, child_a_arr, child_b_arr, rep_arr)
+    accumulate_edge_sums(U, values_arr, clusters_arr, child_a_arr, child_b_arr,
+                         sum_edges_arr, clustered_edges_arr)
+    child_a = child_a_arr
+    child_b = child_b_arr
+    rep = rep_arr
+    sum_edges = sum_edges_arr
+    clustered_edges = clustered_edges_arr
+
+    buckets = [[] for _ in range(N - 1)]
+    for i in range(N):
+        came = i
+        p = U.parent[i]
+        while p != 0:
+            level = p - offset
+            sib = sibling_label(came, level, child_a, child_b)
+            other = subtree_rep(sib, rep, N, offset)
+            if other >= 0:
+                rel = relation_a_to_b(
+                    side_edge_value(came, clustered_edges, N, offset),
+                    side_edge_value(sib, sum_edges, N, offset))
+                buckets[level].append((i, other, rel))
+            came = p
+            p = U.parent[p]
+
+    out = []
+    for level in range(N - 1):
+        if len(buckets[level]) == 0:
+            out.append(np.empty((0, 3), dtype=np.double))
+        else:
+            out.append(np.asarray(buckets[level], dtype=np.double))
+    return out
+
+
+cpdef list point_deltas_by_level(np.ndarray uf_arr, np.ndarray values_arr,
+                                 np.ndarray clusters_arr, np.ndarray coords_arr,
+                                 np.intp_t size):
+    """Delta of every point at each union-find level.
+
+    Level ``k`` is an ``(n, 1 + ndim)`` array. Column 0 is the point index.
+    The remaining columns are that point's delta at the level.
+    """
+    cdef:
+        UnionFind U
+        np.intp_t level, N, offset, sib, i, came, p, ndim
+        np.ndarray child_a_arr, child_b_arr, rep_arr
+        np.ndarray sum_edges_arr, clustered_edges_arr
+        np.ndarray sum_coords_arr, size_arr, coords
+        np.intp_t[::1] child_a, child_b, sizes
+        np.double_t[::1] sum_edges, clustered_edges
+        list buckets
+
+    N = size
+    if N < 2:
+        return []
+
+    coords = coords_arr.reshape(-1, 1) if coords_arr.ndim == 1 else coords_arr
+    ndim = coords.shape[1]
+    U = UnionFind(N, uf_arr)
+    offset = U.get_offset()
+    child_a_arr = np.full(N - 1, -1, dtype=np.intp)
+    child_b_arr = np.full(N - 1, -1, dtype=np.intp)
+    rep_arr = np.full(N - 1, -1, dtype=np.intp)
+    sum_edges_arr = np.zeros(N - 1, dtype=np.double)
+    clustered_edges_arr = np.zeros(N - 1, dtype=np.double)
+    sum_coords_arr = np.zeros((N - 1, ndim), dtype=np.double)
+    size_arr = np.zeros(N - 1, dtype=np.intp)
+    organize_level_relations(U, child_a_arr, child_b_arr, rep_arr)
+    accumulate_edge_sums(U, values_arr, clusters_arr, child_a_arr, child_b_arr,
+                         sum_edges_arr, clustered_edges_arr)
+    accumulate_side_coords(U, coords, child_a_arr, child_b_arr, sum_coords_arr, size_arr)
+    child_a = child_a_arr
+    child_b = child_b_arr
+    sizes = size_arr
+    sum_edges = sum_edges_arr
+    clustered_edges = clustered_edges_arr
+
+    buckets = [[] for _ in range(N - 1)]
+    for i in range(N):
+        came = i
+        p = U.parent[i]
+        while p != 0:
+            level = p - offset
+            sib = sibling_label(came, level, child_a, child_b)
+            if sib >= 0:
+                delta = point_level_delta(
+                    i, came, sib, coords, sum_coords_arr, sizes,
+                    sum_edges, clustered_edges, N, offset)
+                buckets[level].append((i,) + tuple(np.asarray(delta, dtype=np.double).ravel()))
+            came = p
+            p = U.parent[p]
+
+    out = []
+    for level in range(N - 1):
+        if len(buckets[level]) == 0:
+            out.append(np.empty((0, 1 + ndim), dtype=np.double))
+        else:
+            out.append(np.asarray(buckets[level], dtype=np.double))
+    return out
 
 
 cdef move_points(UnionFind U, np.ndarray values_arr,
                  np.ndarray group_arr, np.ndarray coords_arr,
                  np.ndarray sizes_arr, np.ndarray clusters_arr,
                  np.ndarray ret_arr):
-    # 1. evaluating net_coords and sibling ids (traversing connections)
-    # 2. evaluating center shift for each point (traversing points)
-    # 3. adding other side center shift to each point (traversing points)
-    cdef np.intp_t i, loop_size = U.p_size
+    # Every point, at every ancestor level, adds its own delta.
+    cdef np.intp_t n = U.p_size
+    cdef np.intp_t ndim
+    cdef np.ndarray child_a_arr, child_b_arr, rep_arr
+    cdef np.ndarray sum_edges_arr, clustered_edges_arr
+    cdef np.ndarray sum_coords_arr, size_arr, coords, ret
 
-    group_arr = np.empty(loop_size, dtype=object)
-    for i in range(loop_size):
-        group_arr[i] = GroupPlacement(_n_coords(coords_arr))
+    if n < 2:
+        return ret_arr
 
-    group_arr = aggregate_coords(U, values_arr, group_arr, coords_arr, sizes_arr, clusters_arr)
-    side_points_to_center(U, values_arr, group_arr, coords_arr, sizes_arr, clusters_arr)
-    ret_arr = point_vs_all(U, values_arr, group_arr, coords_arr, sizes_arr, clusters_arr, ret_arr)
+    coords = coords_arr.reshape(-1, 1) if coords_arr.ndim == 1 else coords_arr
+    ret = ret_arr.reshape(-1, 1) if ret_arr.ndim == 1 else ret_arr
+    ndim = coords.shape[1]
+    child_a_arr = np.full(n - 1, -1, dtype=np.intp)
+    child_b_arr = np.full(n - 1, -1, dtype=np.intp)
+    rep_arr = np.full(n - 1, -1, dtype=np.intp)
+    sum_edges_arr = np.zeros(n - 1, dtype=np.double)
+    clustered_edges_arr = np.zeros(n - 1, dtype=np.double)
+    sum_coords_arr = np.zeros((n - 1, ndim), dtype=np.double)
+    size_arr = np.zeros(n - 1, dtype=np.intp)
+    organize_level_relations(U, child_a_arr, child_b_arr, rep_arr)
+    accumulate_edge_sums(U, values_arr, clusters_arr, child_a_arr, child_b_arr,
+                         sum_edges_arr, clustered_edges_arr)
+    accumulate_side_coords(U, coords, child_a_arr, child_b_arr, sum_coords_arr, size_arr)
+    apply_level_relations(U, coords, ret,
+                          child_a_arr, child_b_arr,
+                          sum_coords_arr, size_arr,
+                          sum_edges_arr, clustered_edges_arr)
     return ret_arr
 
 
