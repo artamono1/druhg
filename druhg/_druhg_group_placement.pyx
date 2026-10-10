@@ -35,31 +35,23 @@ cdef class GroupPlacement:
     def __init__(self, ndim):
         self.sum_ids = 0
         self.sum_edges = 0
-        self.net_edges = 0
+        self.net_paths = 0
         self.net_densities = 0
         self.sum_coords = np.zeros(ndim, dtype=np.double)
         self.net_coords = np.zeros(ndim, dtype=np.double)
         self.center_shift = np.zeros(ndim, dtype=np.double)
         self.side_shift = np.zeros(ndim, dtype=np.double)
 
-    cdef void add_single_point(self, np.double_t border, np.intp_t id, coords):
+    cdef void add_single_point(self, np.double_t border, np.intp_t id, np.intp_t size, coords):
         self.sum_ids += id
-        self.sum_edges += border * 0.5
         self.sum_coords += coords
-        self.net_edges += border * 0.5
-        self.net_coords += coords
-        self.net_densities += border
+        self.net_paths += border*size
 
     cdef void add_node(self, np.double_t border, np.intp_t id, GroupPlacement node, np.intp_t size, bint is_cluster):
         self.sum_ids += id
-        self.sum_edges += border * 0.5 + node.sum_edges
         self.sum_coords += node.sum_coords
+        self.net_paths += node.net_paths + border*size
         # TODO: merge mean? https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
-
-        self.net_edges += border * 0.5 + ((border * (size - 1)) if is_cluster else node.net_edges)
-        self.net_coords += (node.sum_coords / size) if is_cluster else node.net_coords
-        # have to be reevaluated if another party is cluster
-        self.net_densities += (border / size) if is_cluster else node.net_densities
 
     cdef np.intp_t get_sibling_id(self, np.intp_t id):
         return self.sum_ids - id
@@ -68,7 +60,7 @@ cdef class GroupPlacement:
         self.sum_ids = -1
         self.sum_edges = 0
         self.sum_coords = coords
-        self.net_edges = 0
+        self.net_paths = 0
         self.net_coords = coords
         self.net_densities = 0
         self.center_shift = center_shift

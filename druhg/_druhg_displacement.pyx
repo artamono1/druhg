@@ -53,9 +53,7 @@ cdef aggregate_coords(UnionFind U, np.ndarray values_arr,
         v = values_arr[p]
         p_size = sizes_arr[p]
         p_node = group_arr[p]
-        p_node.add_single_point(v, u, coords_arr[u])
-        if p_size == 2:
-            p_node.net_densities = v * 0.5
+        p_node.add_single_point(v, u, 1, coords_arr[u])
 
     for u in range(loop_size1 + 1, loop_size2):
         i = u - offset
@@ -72,7 +70,8 @@ cdef aggregate_coords(UnionFind U, np.ndarray values_arr,
 
         v = values_arr[p]
         x_node, p_node = group_arr[i], group_arr[p]
-        has_data, j = p_node.sum_edges, p_node.sum_ids
+        has_data = p_node.net_paths
+        j = p_node.sum_ids
 
         p_node.add_node(v, i, x_node, x_size, clusters_arr[i] > 0)
 
@@ -82,76 +81,16 @@ cdef aggregate_coords(UnionFind U, np.ndarray values_arr,
         if y_size != 1 and clusters_arr[j] > 0:  # sibling is not a cluster
             continue
 
-        p_node.net_densities = v / p_size
         if v == 0:
             # TODO: check zero-value edges
             continue
 
     return group_arr
 
-
-cdef side_points_to_center(UnionFind U, np.ndarray values_arr,
-                           np.ndarray group_arr, np.ndarray coords_arr,
-                           np.ndarray sizes_arr, np.ndarray clusters_arr):
-    # monad provides the orientation to a center, magnitude is separated
-    cdef:
-        np.intp_t p, i, j, x_size, y_size, p_size, e
-        np.intp_t loop_size = U.p_size
-        np.intp_t offset = U.get_offset()
-        np.intp_t x_is_cluster, y_is_cluster
-        GroupPlacement x_node, y_node, p_node, x_outlier, y_outlier
-        np.double_t v
-
-    x_outlier = GroupPlacement(_n_coords(coords_arr))
-    y_outlier = GroupPlacement(_n_coords(coords_arr))
-    empty_array = np.zeros(_n_coords(coords_arr), dtype=np.double)
-
-    for e in range(loop_size):
-        e_coords = coords_arr[e]
-        e_node = x_outlier.cook_outlier_coords(e_coords, empty_array)
-        x_node = e_node
-        x_size = 1
-        x_is_cluster = True
-        e_value = 0
-        # e_node is a cluster inside x_node inside p_node
-        # if e_node=x_node then attraction else repulsion
-
-        p = U.parent[e]
-        i = e
-        while p != 0:
-            p -= offset
-            v = values_arr[p]
-
-            p_node, p_size = group_arr[p], sizes_arr[p]
-            y_size = p_size - x_size
-
-            j = p_node.get_sibling_id(i)
-            y_is_cluster = True if y_size == 1 or clusters_arr[j] < 0 else False
-            y_node = group_arr[j] if y_size > 1 else y_outlier.cook_outlier_coords(coords_arr[j], empty_array)
-
-            e_value = v * (v + x_node.sum_edges + y_is_cluster * y_node.sum_edges) if x_is_cluster else e_value
-
-            direction = p_node.sum_coords / p_size - e_coords
-            direction /= np.linalg.norm(direction)
-            x_node.center_shift += direction * e_value  # used by the opposite side in the next loop
-
-            direction = y_node.sum_coords / y_size - e_coords
-            direction /= np.linalg.norm(direction)
-            x_node.side_shift += direction * e_value
-
-            x_node, x_size = p_node, p_size
-            x_is_cluster = clusters_arr[p] < 0
-
-            i = p
-            p = U.parent[p + offset]
-
-
-cdef point_vs_other_side(UnionFind U, np.ndarray values_arr,
+cdef point_shift(UnionFind U, np.ndarray values_arr,
                          np.ndarray group_arr, np.ndarray coords_arr,
                          np.ndarray sizes_arr, np.ndarray clusters_arr,
                          np.ndarray ret_arr):
-    # point shifts to a center and whole other side repels
-    # monad's center is a mediator
     cdef:
         np.intp_t p, i, j, x_size, y_size, p_size, e
         np.intp_t loop_size = U.p_size
@@ -174,6 +113,7 @@ cdef point_vs_other_side(UnionFind U, np.ndarray values_arr,
         x_size = 1
         x_is_cluster = True
         e_value = 0
+        e_path_sum_edges = 0
 
         if debug:
             logger.debug('=== %s point %s', e, e_coords)
@@ -184,37 +124,48 @@ cdef point_vs_other_side(UnionFind U, np.ndarray values_arr,
             p -= offset
             v = values_arr[p]
 
+            e_path_sum_edges += v
+            if x_is_cluster:
+                e_path_cluster_sum_edges = e_path_sum_edges
+
             p_node, p_size = group_arr[p], sizes_arr[p]
             y_size = p_size - x_size
-            center = p_node.sum_coords / p_size
-            center_magnitude = 1. * x_size * y_size / (v * (x_size + y_size)) * p_node.net_densities / p_node.sum_edges
 
             j = p_node.get_sibling_id(i)
-            y_node = group_arr[j] if y_size > 1 else y_outlier.cook_outlier_coords(
-                coords_arr[j],
-                v * (v + x_is_cluster * x_node.sum_edges) * (center - coords_arr[j]) / np.linalg.norm(center - coords_arr[j]))
-            y_is_cluster = True if y_size == 1 or clusters_arr[j] < 0 else False
-            e_value = v * (v + x_node.sum_edges + y_is_cluster * y_node.sum_edges) if x_is_cluster else e_value
+            # y_node = group_arr[j] if y_size > 1 else y_outlier.cook_outlier_coords(
+                # coords_arr[j],
+                # v * (v + x_is_cluster * x_node.sum_edges) * (center - coords_arr[j]) / np.linalg.norm(center - coords_arr[j]))
 
-            alpha = x_size * y_size / (1. * x_size + y_size)
-            magnitude = e_value * center_magnitude * alpha
+            point_to_notpoint = (p_node.sum_coords - e_coords) / (p_size-1)
+            side_to_side = x_node.sum_coords /x_size - (p_node.sum_coords - x_node.sum_coords)/y_size
 
-            direction = center - e_coords
-            direction /= np.linalg.norm(direction)
-            direction *= -1. if x_is_cluster else 1.
-            shift = direction * magnitude
+            all_y_side_net_paths = p_node.net_paths - x_node.net_paths - x_size*v
+            coef_side = e_path_cluster_sum_edges*y_size/all_y_side_net_paths
 
-            other_side_shift = y_node.center_shift * center_magnitude
-            other_side_shift *= -1. if y_is_cluster else 1.
+            shift = side_to_side * coef_side - point_to_notpoint*y_size
+
+            ret_arr[e] += shift
 
             if debug:
-                logger.debug('id %s %s p %s v %.2f sizes %s + %s = %s', i, j, p, v, x_size, y_size, p_size)
-                logger.debug('shift %s other_side_shift %s', shift, other_side_shift)
-
-            ret_arr[e] += shift + other_side_shift
+                logger.debug(
+                    'point %s level %s sibling %s v %.4f cluster %s sizes %s + %s = %s',
+                    e, p, j, v, x_is_cluster, x_size, y_size, p_size)
+                logger.debug(
+                    '  y_net %.4f = parent %.4f - x %.4f - x_top %.4f',
+                    all_y_side_net_paths, p_node.net_paths, x_node.net_paths, x_size*v)
+                logger.debug(
+                    '  path %.4f cluster_path %.4f y_net %.4f coef %.4f',
+                    e_path_sum_edges, e_path_cluster_sum_edges,
+                    all_y_side_net_paths, coef_side)
+                logger.debug(
+                    '  side %s rest %s shift %s pos %s',
+                    side_to_side, point_to_notpoint, shift, ret_arr[e])
 
             x_node, x_size = p_node, p_size
             x_is_cluster = clusters_arr[p] < 0
+
+            if x_is_cluster:
+                e_path_cluster_sum_edges = e_path_sum_edges
 
             i = p
             p = U.parent[p + offset]
@@ -222,96 +173,6 @@ cdef point_vs_other_side(UnionFind U, np.ndarray values_arr,
         if debug:
             logger.debug('net_shift %s', ret_arr[e] - e_coords)
     return ret_arr
-
-
-cdef point_vs_all(UnionFind U, np.ndarray values_arr,
-                  np.ndarray group_arr, np.ndarray coords_arr,
-                  np.ndarray sizes_arr, np.ndarray clusters_arr,
-                  np.ndarray ret_arr):
-    # point shifts to a center and whole other side repels
-    # monad's center is a mediator
-    cdef:
-        np.intp_t p, i, j, x_size, y_size, p_size, e
-        np.intp_t loop_size = U.p_size
-        np.intp_t offset = U.get_offset()
-        np.intp_t x_is_cluster, y_is_cluster
-        GroupPlacement x_node, y_node, p_node, x_outlier, y_outlier
-        np.double_t v
-
-    logger = logging.getLogger(__package__)
-    debug = logger.isEnabledFor(logging.DEBUG)
-
-    x_outlier = GroupPlacement(_n_coords(coords_arr))
-    y_outlier = GroupPlacement(_n_coords(coords_arr))
-    empty_array = np.zeros(_n_coords(coords_arr), dtype=np.double)
-
-    for e in range(loop_size):
-        e_coords = coords_arr[e]
-        e_node = x_outlier.cook_outlier_coords(e_coords, empty_array)
-        x_node = e_node
-        x_size = 1
-        x_is_cluster = True
-        e_value = 0
-
-        if debug:
-            logger.debug('=== %s point %s', e, e_coords)
-        assert all(ret_arr[e] == e_coords)
-        p = U.parent[e]
-        i = e
-        while p != 0:
-            p -= offset
-            v = values_arr[p]
-
-            p_node, p_size = group_arr[p], sizes_arr[p]
-            y_size = p_size - x_size
-            center = p_node.sum_coords / p_size
-            center_magnitude = 1. * x_size * y_size / (v * (x_size + y_size)) * p_node.net_densities / p_node.sum_edges
-
-            j = p_node.get_sibling_id(i)
-            y_node = group_arr[j] if y_size > 1 else y_outlier.cook_outlier_coords(
-                coords_arr[j],
-                v * (v + x_is_cluster * x_node.sum_edges) * (center - coords_arr[j]) / np.linalg.norm(center - coords_arr[j]),
-                v * (v + x_is_cluster * x_node.sum_edges) * (x_node.sum_coords / x_size - coords_arr[j]) / np.linalg.norm(x_node.sum_coords / x_size - coords_arr[j]),
-            )
-            y_is_cluster = True if (y_size == 1 or clusters_arr[j] < 0) else False
-            e_value = (v * (v + x_node.sum_edges + y_is_cluster * y_node.sum_edges)) if x_is_cluster else e_value
-
-            e_center_shift = center - e_coords
-            e_center_shift /= np.linalg.norm(e_center_shift)
-            e_center_shift *= e_value
-
-            e_side_shift = y_node.sum_coords / y_size - e_coords
-            e_side_shift /= np.linalg.norm(e_side_shift)
-            e_side_shift *= e_value
-
-            if x_size == 1:  # initialisation
-                x_node = x_outlier.cook_outlier_coords(e_coords, e_center_shift, e_side_shift)
-
-            alpha = 1. * y_size  # каждый с каждым
-            alpha *= 1. / (1. * x_size + y_size)
-            orientation = -1. if x_is_cluster else 1.
-            shift = orientation * e_center_shift * center_magnitude * alpha
-
-            all_shift = y_node.center_shift * center_magnitude
-            all_shift *= -1. if y_is_cluster else 1.
-            all_shift += shift
-
-            if debug:
-                logger.debug('id %s %s p %s v %.2f sizes %s + %s = %s', i, j, p, v, x_size, y_size, p_size)
-                logger.debug('all_shift %s', all_shift)
-
-            ret_arr[e] += all_shift
-
-            x_node, x_size = p_node, p_size
-            x_is_cluster = clusters_arr[p] < 0
-
-            i = p
-            p = U.parent[p + offset]
-
-        if debug:
-            logger.debug('net_shift %s', ret_arr[e] - e_coords)
-    return ret_arr
-
 
 cdef move_points(UnionFind U, np.ndarray values_arr,
                  np.ndarray group_arr, np.ndarray coords_arr,
@@ -319,7 +180,6 @@ cdef move_points(UnionFind U, np.ndarray values_arr,
                  np.ndarray ret_arr):
     # 1. evaluating net_coords and sibling ids (traversing connections)
     # 2. evaluating center shift for each point (traversing points)
-    # 3. adding other side center shift to each point (traversing points)
     cdef np.intp_t i, loop_size = U.p_size
 
     group_arr = np.empty(loop_size, dtype=object)
@@ -327,8 +187,7 @@ cdef move_points(UnionFind U, np.ndarray values_arr,
         group_arr[i] = GroupPlacement(_n_coords(coords_arr))
 
     group_arr = aggregate_coords(U, values_arr, group_arr, coords_arr, sizes_arr, clusters_arr)
-    side_points_to_center(U, values_arr, group_arr, coords_arr, sizes_arr, clusters_arr)
-    ret_arr = point_vs_all(U, values_arr, group_arr, coords_arr, sizes_arr, clusters_arr, ret_arr)
+    ret_arr = point_shift(U, values_arr, group_arr, coords_arr, sizes_arr, clusters_arr, ret_arr)
     return ret_arr
 
 
