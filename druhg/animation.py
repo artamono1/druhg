@@ -14,7 +14,6 @@ class Frames(object):
                 xlim=[-20, 20], ylim=[-20, 20], xlabel='x', ylabel='y'):
         try:
             import matplotlib.pyplot as plt
-            import matplotlib.animation as animation
         except ImportError:
             raise ImportError('You must install the matplotlib library to animate the data.')
 
@@ -27,6 +26,8 @@ class Frames(object):
         self._druhg.allocate_buffers(XX)
         self._run_times = 0
 
+        was_interactive = plt.isinteractive()
+        plt.ion()
         if fig is None or ax is None:
             fig, ax = plt.subplots()
 
@@ -49,11 +50,23 @@ class Frames(object):
                 time_text.set_text('frame: ' + str(frame))
             return (scat, time_text)
 
-        def empty_init():
-            pass
-
-        self._ani = animation.FuncAnimation(
-            fig=fig, func=update_frame, init_func=empty_init,
-            frames=frames, interval=interval_ms)
-        plt.show()
+        frame_seq = range(frames) if isinstance(frames, int) else frames
+        # plt.pause() calls show(), which raises the window. On Wayland that
+        # prints "QWindow::requestActivate" once per frame.
+        fig.canvas.draw_idle()
+        try:
+            for frame in frame_seq:
+                if not plt.fignum_exists(fig.number):
+                    break
+                update_frame(frame)
+                fig.canvas.draw_idle()
+                if interval_ms > 0:
+                    fig.canvas.start_event_loop(interval_ms / 1000.0)
+                else:
+                    fig.canvas.flush_events()
+        finally:
+            if plt.fignum_exists(fig.number):
+                plt.close(fig)
+            if not was_interactive:
+                plt.ioff()
         return self
