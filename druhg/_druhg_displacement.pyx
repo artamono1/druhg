@@ -118,7 +118,7 @@ cdef evaluate_reverse_paths(UnionFind U, np.ndarray values_arr,
         level_cluster = 0
 
         if debug:
-            logger.debug('=== %s point %s', e, e_coords)
+            logger.debug('--- %s point %s', e, e_coords)
         p = U.parent[e]
         i = e
         while p != 0:
@@ -224,12 +224,12 @@ cdef point_shift(UnionFind U, np.ndarray values_arr,
                     '  path %.4f cluster_path %.4f lvl_c %s',
                     e_path_sum_edges, e_path_cluster_sum_edges, level_cluster)
                 logger.debug(
-                    '  y dens %.4f product %.4f paths %.4f reverse %.4f',
-                    y_side.net_densities, y_side.net_clustered_product,
-                    y_side.net_clustered_paths, y_side.net_reverse_paths)
+                    '  y paths %.4f product %.4f reverse %.4f dens %.4f ',
+                    y_side.net_clustered_paths, y_side.net_clustered_product,
+                    y_side.net_reverse_paths, y_side.net_densities)
                 logger.debug(
                     '  top %.4f bottom %.4f coef %.4f',
-                    top, bottom, top / bottom)
+                    top, bottom, top/bottom)
                 logger.debug(
                     '  side %s rest %s shift %s pos %s',
                     side_to_side, point_to_notpoint, shift, ret_arr[e])
