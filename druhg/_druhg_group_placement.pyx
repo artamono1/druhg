@@ -36,6 +36,9 @@ cdef class GroupPlacement:
         self.sum_ids = 0
         self.sum_edges = 0
         self.net_paths = 0
+        self.net_clustered_paths = 0
+        self.net_clustered_product = 0
+        self.net_reverse_paths = 0
         self.net_densities = 0
         self.sum_coords = np.zeros(ndim, dtype=np.double)
         self.net_coords = np.zeros(ndim, dtype=np.double)
@@ -56,15 +59,12 @@ cdef class GroupPlacement:
     cdef np.intp_t get_sibling_id(self, np.intp_t id):
         return self.sum_ids - id
 
-    cdef GroupPlacement cook_outlier_coords(self, np.ndarray coords, np.ndarray center_shift, np.ndarray side_shift=None):
+    cdef GroupPlacement cook_outlier_coords(self, np.ndarray coords, np.double_t border):
         self.sum_ids = -1
         self.sum_edges = 0
         self.sum_coords = coords
         self.net_paths = 0
         self.net_coords = coords
-        self.net_densities = 0
-        self.center_shift = center_shift
-        if side_shift is None:
-            side_shift = center_shift
-        self.side_shift = side_shift
+        self.net_clustered_paths = self.net_clustered_product = border
+        self.net_reverse_paths = self.net_densities = 1./border
         return self

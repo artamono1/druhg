@@ -87,10 +87,10 @@ cdef aggregate_coords(UnionFind U, np.ndarray values_arr,
 
     return group_arr
 
-cdef point_shift(UnionFind U, np.ndarray values_arr,
+cdef evaluate_reverse_paths(UnionFind U, np.ndarray values_arr,
                          np.ndarray group_arr, np.ndarray coords_arr,
-                         np.ndarray sizes_arr, np.ndarray clusters_arr,
-                         np.ndarray ret_arr):
+                         np.ndarray sizes_arr, np.ndarray clusters_arr
+                         ):
     cdef:
         np.intp_t p, i, j, x_size, y_size, p_size, e
         np.intp_t loop_size = U.p_size
@@ -108,12 +108,81 @@ cdef point_shift(UnionFind U, np.ndarray values_arr,
 
     for e in range(loop_size):
         e_coords = coords_arr[e]
-        e_node = x_outlier.cook_outlier_coords(e_coords, empty_array)
+        e_node = x_outlier.cook_outlier_coords(e_coords, 0)
         x_node = e_node
         x_size = 1
         x_is_cluster = True
         e_value = 0
         e_path_sum_edges = 0
+        level = 0
+        level_cluster = 0
+
+        if debug:
+            logger.debug('=== %s point %s', e, e_coords)
+        p = U.parent[e]
+        i = e
+        while p != 0:
+            p -= offset
+            v = values_arr[p]
+
+            e_path_sum_edges += v
+            level += 1
+            if x_is_cluster:
+                e_path_cluster_sum_edges = e_path_sum_edges
+                level_cluster = level
+
+            x_node.net_clustered_paths += e_path_cluster_sum_edges
+            x_node.net_clustered_product += 1.* level_cluster * e_path_cluster_sum_edges
+            x_node.net_reverse_paths += 1./e_path_sum_edges
+            x_node.net_densities += 1.* level /e_path_sum_edges
+
+            if debug:
+                logger.debug(
+                    'rev point %s onto %s depth %s path %.4f cluster_path %.4f lvl_c %s',
+                    e, 'outlier' if x_node is e_node else i, level,
+                    e_path_sum_edges, e_path_cluster_sum_edges, level_cluster)
+                logger.debug(
+                    '  +paths %.4f +product %.4f +reverse %.4f +dens %.4f',
+                    e_path_cluster_sum_edges,
+                    level_cluster * e_path_cluster_sum_edges,
+                    1. / e_path_sum_edges, level / e_path_sum_edges)
+
+            p_node, p_size = group_arr[p], sizes_arr[p]
+            x_node, x_size = p_node, p_size
+            x_is_cluster = clusters_arr[p] < 0
+
+            i = p
+            p = U.parent[p + offset]
+
+cdef point_shift(UnionFind U, np.ndarray values_arr,
+                         np.ndarray group_arr, np.ndarray coords_arr,
+                         np.ndarray sizes_arr, np.ndarray clusters_arr,
+                         np.ndarray ret_arr):
+    cdef:
+        np.intp_t p, i, j, x_size, y_size, p_size, e
+        np.intp_t loop_size = U.p_size
+        np.intp_t offset = U.get_offset()
+        np.intp_t x_is_cluster, y_is_cluster
+        GroupPlacement x_node, y_side, p_node, x_outlier, y_outlier
+        np.double_t v
+
+    logger = logging.getLogger(__package__)
+    debug = logger.isEnabledFor(logging.DEBUG)
+
+    x_outlier = GroupPlacement(_n_coords(coords_arr))
+    y_outlier = GroupPlacement(_n_coords(coords_arr))
+    empty_array = np.zeros(_n_coords(coords_arr), dtype=np.double)
+
+    for e in range(loop_size):
+        e_coords = coords_arr[e]
+        e_node = x_outlier.cook_outlier_coords(e_coords, 0)
+        x_node = e_node
+        x_size = 1
+        x_is_cluster = True
+        e_value = 0
+        e_path_sum_edges = 0
+        level = 0
+        level_cluster = 0
 
         if debug:
             logger.debug('=== %s point %s', e, e_coords)
@@ -125,47 +194,48 @@ cdef point_shift(UnionFind U, np.ndarray values_arr,
             v = values_arr[p]
 
             e_path_sum_edges += v
+            level += 1
             if x_is_cluster:
                 e_path_cluster_sum_edges = e_path_sum_edges
+                level_cluster = level
 
             p_node, p_size = group_arr[p], sizes_arr[p]
             y_size = p_size - x_size
 
             j = p_node.get_sibling_id(i)
-            # y_node = group_arr[j] if y_size > 1 else y_outlier.cook_outlier_coords(
-                # coords_arr[j],
-                # v * (v + x_is_cluster * x_node.sum_edges) * (center - coords_arr[j]) / np.linalg.norm(center - coords_arr[j]))
+            y_side = group_arr[j] if y_size > 1 else y_outlier.cook_outlier_coords(
+                coords_arr[j],
+                v)
 
             point_to_notpoint = (p_node.sum_coords - e_coords) / (p_size-1)
             side_to_side = x_node.sum_coords /x_size - (p_node.sum_coords - x_node.sum_coords)/y_size
 
-            all_y_side_net_paths = p_node.net_paths - x_node.net_paths - x_size*v
-            coef_side = e_path_cluster_sum_edges*y_size/all_y_side_net_paths
-
-            shift = side_to_side * coef_side - point_to_notpoint*y_size
+            top = level_cluster * e_path_cluster_sum_edges * y_side.net_densities
+            bottom = level_cluster / e_path_sum_edges * y_side.net_clustered_product
+            shift = side_to_side * top/bottom - point_to_notpoint*y_size
 
             ret_arr[e] += shift
 
             if debug:
                 logger.debug(
-                    'point %s level %s sibling %s v %.4f cluster %s sizes %s + %s = %s',
-                    e, p, j, v, x_is_cluster, x_size, y_size, p_size)
+                    'point %s node %s depth %s sibling %s v %.4f cluster %s sizes %s + %s = %s',
+                    e, p, level, j, v, x_is_cluster, x_size, y_size, p_size)
                 logger.debug(
-                    '  y_net %.4f = parent %.4f - x %.4f - x_top %.4f',
-                    all_y_side_net_paths, p_node.net_paths, x_node.net_paths, x_size*v)
+                    '  path %.4f cluster_path %.4f lvl_c %s',
+                    e_path_sum_edges, e_path_cluster_sum_edges, level_cluster)
                 logger.debug(
-                    '  path %.4f cluster_path %.4f y_net %.4f coef %.4f',
-                    e_path_sum_edges, e_path_cluster_sum_edges,
-                    all_y_side_net_paths, coef_side)
+                    '  y dens %.4f product %.4f paths %.4f reverse %.4f',
+                    y_side.net_densities, y_side.net_clustered_product,
+                    y_side.net_clustered_paths, y_side.net_reverse_paths)
+                logger.debug(
+                    '  top %.4f bottom %.4f coef %.4f',
+                    top, bottom, top / bottom)
                 logger.debug(
                     '  side %s rest %s shift %s pos %s',
                     side_to_side, point_to_notpoint, shift, ret_arr[e])
 
             x_node, x_size = p_node, p_size
             x_is_cluster = clusters_arr[p] < 0
-
-            if x_is_cluster:
-                e_path_cluster_sum_edges = e_path_sum_edges
 
             i = p
             p = U.parent[p + offset]
@@ -187,6 +257,7 @@ cdef move_points(UnionFind U, np.ndarray values_arr,
         group_arr[i] = GroupPlacement(_n_coords(coords_arr))
 
     group_arr = aggregate_coords(U, values_arr, group_arr, coords_arr, sizes_arr, clusters_arr)
+    evaluate_reverse_paths(U, values_arr, group_arr, coords_arr, sizes_arr, clusters_arr)
     ret_arr = point_shift(U, values_arr, group_arr, coords_arr, sizes_arr, clusters_arr, ret_arr)
     return ret_arr
 
