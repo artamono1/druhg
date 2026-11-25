@@ -95,10 +95,10 @@ cdef class Clusterizer:
             np.intp_t x_is_cluster, y_is_cluster
             GroupNode x_node, y_node
 
-            np.double_t v, limit = 0.
+            np.double_t v, pair_recip, limit = 0.
 
         data_dict = {}
-        outlier = GroupNode(0)  # stub, values are ignored
+        outlier = GroupNode(0, 0, 0)  # stub, values are ignored
 
         logger = logging.getLogger(__package__)
 
@@ -120,7 +120,10 @@ cdef class Clusterizer:
 
             if y_size != 0:  # same as y_size == 1
                 self.ret_clusters[p] = 1
-                data_dict[p] = GroupNode(sum_reciprocals=1. / v if v != 0. else 0.)
+                # One link of length v. Both sides are size 1 on a connection of 2,
+                # so sum(ni/(Ni di)) = 1/(2v) + 1/(2v) = 1/v, and sum(di) = v.
+                pair_recip = 1. / v if v != 0. else 0.
+                data_dict[p] = GroupNode(pair_recip, v, pair_recip)
 
         logger.info('Labeling: %s nodes allocated', len(data_dict))
 

@@ -16,6 +16,8 @@ cdef set_precision(np.double_t prec)
 
 cdef struct GroupNode:
     np.double_t sum_reciprocals  # 1 / di sum per linked
+    np.double_t sum_uniqs  # di sum per linked
+    np.double_t sum_weighted_reciprocals  # ni / (Ni di) sum per linked
 
 cdef class Group:
     cdef:
